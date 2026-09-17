@@ -1,6 +1,7 @@
-# Data — published separately (see ZENODO_UPLOAD.md), never committed here
-data/*
-!data/DATASET_README.md
+# Data and anything describing it: the dataset belongs to the paper's authors and
+# is not published from this repository. Kept local only.
+data/
+ZENODO_UPLOAD.md
 *.zip
 
 # Workflow products

@@ -49,11 +49,10 @@ The input is six manually corrected ICESat-2 ATL03 track CSVs over the Ross Sea 
 > the paper's authors, and whether and where to publish it is their decision. Request it from them
 > — contact details are in the paper and in their repository at
 > <https://github.com/jmiqra/Sentinel-2_Sea-Ice_Classification>.
->
-> [`data/DATASET_README.md`](data/DATASET_README.md) documents the format, provenance, columns and
-> known pitfalls, so you can tell whether your copy is the right one.
-> [`ZENODO_UPLOAD.md`](ZENODO_UPLOAD.md) holds prepared publication metadata, should the authors
-> decide to release it.
+
+What you need is six files named `ATL03_<datetime>_<rgt>_<tile>_<beam>_labeled_10m_done.csv`, each
+a 2 m resampled ATL03 track with a `label` column (0 thick ice, 1 thin ice, 2 open water) and a
+`h_cor_mean` column giving corrected elevation above mean sea surface.
 
 Once you have the archive, unpack it so the CSVs land in `data/IS2_Corrected_data/`:
 
