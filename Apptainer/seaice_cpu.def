@@ -1,0 +1,64 @@
+# Sea ice workflow container — CPU stages.
+#
+# Used by: extract_atl07, extract_atl10, autolabel_correct, preprocess_atl03,
+#          prepare_lstm_data, compute_freeboard, validate_freeboard, paper_figures
+#
+# `Bootstrap: docker` pulls and converts the OCI base image directly, so no
+# Docker installation is needed anywhere to build this image.
+#
+# Built inside the workflow by the build_container_cpu job, or by hand:
+#   apptainer build containers/seaice_cpu.sif Apptainer/seaice_cpu.def
+#
+# Nothing from the repository is copied into this image: there is no %files
+# section. The image carries dependencies only; the workflow bind-mounts the
+# bin/*.py stage scripts in at run time, so editing workflow code never requires
+# a rebuild. Rebuild only when the dependency list in %post changes.
+
+Bootstrap: docker
+From: python:3.10-slim-bookworm
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+
+    # curl/wget: PegasusLite may fetch its worker package from inside the
+    # container. libgdal/libgl/libglib: runtime libraries for rasterio,
+    # geopandas and opencv-python-headless.
+    apt-get update && \
+        apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            wget \
+            libgdal-dev \
+            libgl1 \
+            libglib2.0-0
+    rm -rf /var/lib/apt/lists/*
+
+    # Declared inline rather than copied in from a requirements file: nothing is
+    # baked into this image except dependencies, so the image never has to be
+    # rebuilt when workflow code changes.
+    pip install --no-cache-dir --upgrade pip
+    pip install --no-cache-dir \
+        numpy \
+        pandas \
+        geopandas \
+        scipy \
+        scikit-learn \
+        rasterio \
+        opencv-python-headless \
+        Pillow \
+        matplotlib \
+        seaborn \
+        h5py
+
+%environment
+    # Unbuffered so Pegasus captures job logs in real time; Agg so matplotlib
+    # never looks for a display on a worker node.
+    export PYTHONUNBUFFERED=1
+    export MPLBACKEND=Agg
+
+%runscript
+    exec /bin/bash "$@"
+
+%labels
+    Maintainer Komal Thareja <kthare10@renci.org>
+    Description CPU container for the sea ice classification and freeboard workflow

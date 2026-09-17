@@ -1,0 +1,30 @@
+# Data — published separately (see ZENODO_UPLOAD.md), never committed here
+data/*
+!data/DATASET_README.md
+*.zip
+
+# Workflow products
+output/
+results*/
+scratch/
+submit/
+ubuntu/
+logs/
+*.tar.gz
+
+# Container images: built by the workflow, far too large for git
+containers/
+.apptainer_tmp/
+*.sif
+
+# The paper itself — read it at https://arxiv.org/abs/2502.02700
+*.pdf
+
+# Local environments and editor state
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.idea/
+.vscode/
+.DS_Store

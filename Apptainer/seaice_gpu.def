@@ -1,0 +1,56 @@
+# Sea ice workflow container — GPU stages.
+#
+# Used by: train_lstm, inference_lstm
+#
+# `Bootstrap: docker` pulls and converts the OCI base image directly, so no
+# Docker installation is needed anywhere to build this image.
+#
+# TensorFlow 2.14 requires numpy < 2 — that pin lives in the %post section below and
+# must stay. Run GPU stages with `apptainer exec --nv` so the host NVIDIA driver
+# is passed through; bin/seaice_run.sh does this when given --nv.
+#
+# Built inside the workflow by the build_container_gpu job, or by hand:
+#   apptainer build containers/seaice_gpu.sif Apptainer/seaice_gpu.def
+#
+# Nothing from the repository is copied into this image: there is no %files
+# section. The image carries dependencies only; the workflow bind-mounts the
+# bin/*.py stage scripts in at run time, so editing workflow code never requires
+# a rebuild. Rebuild only when the dependency list in %post changes.
+
+Bootstrap: docker
+From: tensorflow/tensorflow:2.14.0-gpu
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update && \
+        apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            wget
+    rm -rf /var/lib/apt/lists/*
+
+    # Declared inline rather than copied in from a requirements file: nothing is
+    # baked into this image except dependencies, so the image never has to be
+    # rebuilt when workflow code changes.
+    # numpy < 2 is required by TensorFlow 2.14 and must stay pinned.
+    pip install --no-cache-dir \
+        "numpy<2" \
+        pandas \
+        scikit-learn \
+        keras-tuner \
+        h5py \
+        matplotlib
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export MPLBACKEND=Agg
+    # Quieten TensorFlow's startup banner in job logs (0=all, 2=warnings+errors)
+    export TF_CPP_MIN_LOG_LEVEL=2
+
+%runscript
+    exec /bin/bash "$@"
+
+%labels
+    Maintainer Komal Thareja <kthare10@renci.org>
+    Description GPU container (TensorFlow 2.14) for sea ice LSTM training and inference

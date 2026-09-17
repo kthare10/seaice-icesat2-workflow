@@ -1,0 +1,108 @@
+# Sea ice workflow container — GPU stages with Horovod data-parallel training.
+#
+# Used by: train_lstm when the workflow is generated with --horovod
+#
+# This is the plain GPU image plus OpenMPI and Horovod built against TensorFlow
+# with NCCL collectives. It is kept separate from seaice_gpu.def because the
+# Horovod build compiles from source and adds roughly 10-20 minutes to a cold
+# build; runs that do not use distributed training should not pay for that.
+#
+# Built inside the workflow by build_container_gpu when --horovod is given, or:
+#   apptainer build containers/seaice_gpu_horovod.sif Apptainer/seaice_gpu_horovod.def
+#
+# Horovod needs one process per GPU, launched by horovodrun/mpirun. That is what
+# `bin/seaice_run.sh --np N` does. Because HTCondor's vanilla universe gives a job
+# a single machine, N is bounded by the GPUs on one worker (2 here); multi-node
+# Horovod would need the parallel universe and MPI over SSH between workers.
+#
+# Nothing from the repository is copied into this image: there is no %files
+# section. The image carries dependencies only; the workflow bind-mounts the
+# bin/*.py stage scripts in at run time.
+
+Bootstrap: docker
+From: tensorflow/tensorflow:2.14.0-gpu
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update && \
+        apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            wget \
+            build-essential \
+            cmake \
+            g++ \
+            git \
+            libopenmpi-dev \
+            openmpi-bin \
+            openssh-client
+    rm -rf /var/lib/apt/lists/*
+
+    # numpy < 2 is required by TensorFlow 2.14 and must stay pinned.
+    pip install --no-cache-dir \
+        "numpy<2" \
+        pandas \
+        scikit-learn \
+        keras-tuner \
+        h5py \
+        matplotlib
+
+    # NCCL: the TensorFlow image bundles NCCL headers inside the TF wheel but no
+    # shared library, so Horovod's CMake cannot find it (FindNCCL looks for
+    # libnccl.so + nccl.h). Install the standalone wheel and point Horovod at it.
+    # TF 2.14 is built against CUDA 11, hence the cu11 wheel.
+    pip install --no-cache-dir nvidia-nccl-cu11 || true
+    NCCL_ROOT="$(python3 -c 'import os, nvidia.nccl as n; print(os.path.dirname(n.__file__))' 2>/dev/null || true)"
+    GPU_OPS=MPI
+    if [ -n "$NCCL_ROOT" ] && [ -f "$NCCL_ROOT/lib/libnccl.so.2" ]; then
+        # CMake wants an unversioned soname next to the header.
+        ln -sf "$NCCL_ROOT/lib/libnccl.so.2" "$NCCL_ROOT/lib/libnccl.so"
+        export HOROVOD_NCCL_HOME="$NCCL_ROOT"
+        export HOROVOD_NCCL_INCLUDE="$NCCL_ROOT/include"
+        export HOROVOD_NCCL_LIB="$NCCL_ROOT/lib"
+        export LD_LIBRARY_PATH="$NCCL_ROOT/lib:${LD_LIBRARY_PATH:-}"
+        GPU_OPS=NCCL
+        echo "Horovod: building with NCCL from $NCCL_ROOT"
+    else
+        echo "Horovod: NCCL wheel unavailable, falling back to MPI collectives"
+    fi
+
+    # Build Horovod against TensorFlow only; HOROVOD_WITHOUT_* keeps the build
+    # from hunting for PyTorch/MXNet. If the NCCL build fails for any reason,
+    # retry with MPI collectives rather than failing the image: on this cluster a
+    # job gets one worker with at most 2 GPUs, where MPI all-reduce is adequate.
+    if ! HOROVOD_WITH_TENSORFLOW=1 \
+         HOROVOD_WITHOUT_PYTORCH=1 \
+         HOROVOD_WITHOUT_MXNET=1 \
+         HOROVOD_GPU_OPERATIONS=$GPU_OPS \
+         HOROVOD_WITH_MPI=1 \
+             pip install --no-cache-dir horovod[tensorflow]==0.28.1; then
+        echo "Horovod: $GPU_OPS build failed, retrying with MPI collectives"
+        HOROVOD_WITH_TENSORFLOW=1 \
+        HOROVOD_WITHOUT_PYTORCH=1 \
+        HOROVOD_WITHOUT_MXNET=1 \
+        HOROVOD_GPU_OPERATIONS=MPI \
+        HOROVOD_WITH_MPI=1 \
+            pip install --no-cache-dir horovod[tensorflow]==0.28.1
+    fi
+
+    # Fail the build here rather than at job time if the wiring is wrong.
+    horovodrun --check-build
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export MPLBACKEND=Agg
+    export TF_CPP_MIN_LOG_LEVEL=2
+    # Running MPI as root inside a container is normal for Apptainer images.
+    export OMPI_ALLOW_RUN_AS_ROOT=1
+    export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+    # So the NCCL shared library (a pip wheel, not a system package) is found.
+    export LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/nccl/lib:${LD_LIBRARY_PATH:-}
+
+%runscript
+    exec /bin/bash "$@"
+
+%labels
+    Maintainer Komal Thareja <kthare10@renci.org>
+    Description GPU container (TensorFlow 2.14 + Horovod) for distributed sea ice LSTM training
