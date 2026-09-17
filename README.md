@@ -42,28 +42,30 @@ because the workflow builds its own.
 
 ### Step 1 — Get the data
 
-The dataset is six manually corrected ICESat-2 ATL03 track CSVs over the Ross Sea (4 and 26
-November 2019, beams gt1r and gt2r), about 50 MB zipped. It is the input the paper's figures are
-based on.
+The input is six manually corrected ICESat-2 ATL03 track CSVs over the Ross Sea (4 and 26 November
+2019, beams gt1r and gt2r), about 50 MB. It is the data the paper's figures are based on.
+
+> **This repository does not distribute the dataset.** The manual label corrections are the work of
+> the paper's authors, and whether and where to publish it is their decision. Request it from them
+> — contact details are in the paper and in their repository at
+> <https://github.com/jmiqra/Sentinel-2_Sea-Ice_Classification>.
+>
+> [`data/DATASET_README.md`](data/DATASET_README.md) documents the format, provenance, columns and
+> known pitfalls, so you can tell whether your copy is the right one.
+> [`ZENODO_UPLOAD.md`](ZENODO_UPLOAD.md) holds prepared publication metadata, should the authors
+> decide to release it.
+
+Once you have the archive, unpack it so the CSVs land in `data/IS2_Corrected_data/`:
 
 ```bash
-# If you already have the archive
-unzip data/IS2_Corrected_data.zip -d data/
+unzip IS2_Corrected_data.zip -d data/
 
-# Or download it first. Replace the URL with wherever the dataset is published:
-#   curl -L -o data/IS2_Corrected_data.zip "<DATASET_URL>"
-#   unzip data/IS2_Corrected_data.zip -d data/
+# or, if it is published at a URL later:
+#   curl -L -o IS2_Corrected_data.zip "<DATASET_URL>" && unzip IS2_Corrected_data.zip -d data/
 ```
 
-> **Publishing this dataset.** If you are the one making it available, put it somewhere that serves
-> a plain, unauthenticated file over HTTPS so the `curl` line above just works. Zenodo is the best
-> fit for a dataset backing a paper: free, no account needed to download, permanent, and it mints a
-> DOI you can cite. A GitHub release asset is the simplest alternative if a DOI does not matter.
-> Avoid Google Drive, Dropbox and Box share links — they redirect through interstitial pages that
-> break `curl` and `wget`.
->
-> [`ZENODO_UPLOAD.md`](ZENODO_UPLOAD.md) has the metadata filled in ready to paste, and
-> [`data/DATASET_README.md`](data/DATASET_README.md) is a description to ship inside the archive.
+The workflow reads whatever directory you point `--input-dir` at, so the location is not fixed; the
+commands below assume `data/IS2_Corrected_data/`.
 
 Confirm you have six files:
 
@@ -729,6 +731,40 @@ bin/seaice_run.sh --container containers/seaice_cpu.sif --script bin/prepare_lst
 bin/seaice_run.sh --container containers/seaice_gpu.sif --script bin/train_lstm.py --nv -- \
     --data prepared.csv --model-output model.h5 --epochs 50
 ```
+
+## Licence and attribution
+
+This workflow is licensed under the **Apache License 2.0** — see [`LICENSE`](LICENSE) and
+[`NOTICE`](NOTICE).
+
+Two things in this repository are **not** covered by that licence:
+
+- **`figures/paper/`** — panels reproduced from the paper for comparison, under
+  [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/), the licence the paper
+  carries. See [`figures/paper/README.md`](figures/paper/README.md).
+- **The input data** — not distributed here at all; see [Step 1](#step-1--get-the-data).
+
+The scientific method implemented here is the authors' work, not this repository's. If you use this
+workflow, cite the paper:
+
+```bibtex
+@inproceedings{iqrah2025seaice,
+  title     = {Scalable Higher Resolution Polar Sea Ice Classification and
+               Freeboard Calculation from {ICESat-2} {ATL03} Data},
+  author    = {Iqrah, Jurdana Masuma and Koo, Younghyun and Wang, Wei and
+               Xie, Hongjie and Prasad, Sushil K.},
+  booktitle = {IEEE International Parallel and Distributed Processing Symposium
+               Workshops (IPDPSW)},
+  year      = {2025},
+  note      = {arXiv:2502.02700}
+}
+```
+
+Differences between this implementation and the published method are recorded in
+[`GAP_ANALYSIS.md`](GAP_ANALYSIS.md), and measured results are compared in
+[`PAPER_COMPARISON.md`](PAPER_COMPARISON.md).
+
+---
 
 ## Troubleshooting
 

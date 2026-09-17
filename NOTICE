@@ -1,0 +1,40 @@
+Sea Ice Classification & Freeboard — Pegasus Workflow
+Copyright 2026 Renaissance Computing Institute (RENCI),
+University of North Carolina at Chapel Hill
+
+This product includes software developed at RENCI (https://renci.org/).
+
+--------------------------------------------------------------------------------
+Scientific provenance
+--------------------------------------------------------------------------------
+
+This workflow is an implementation of the pipeline described in:
+
+  Iqrah, J. M., Koo, Y., Wang, W., Xie, H. & Prasad, S. K. (2025).
+  "Scalable Higher Resolution Polar Sea Ice Classification and Freeboard
+  Calculation from ICESat-2 ATL03 Data."
+  IEEE International Parallel and Distributed Processing Symposium Workshops.
+  https://arxiv.org/abs/2502.02700
+
+The processing steps in bin/ are derived from the authors' Jupyter notebooks at
+https://github.com/jmiqra/Sentinel-2_Sea-Ice_Classification. The scientific
+method is theirs; this repository restructures it as a reproducible Pegasus
+workflow. Differences from the published method are documented in
+GAP_ANALYSIS.md.
+
+--------------------------------------------------------------------------------
+Components under other licences
+--------------------------------------------------------------------------------
+
+figures/paper/
+    Panels extracted from the paper above, reproduced for comparison under
+    CC BY-NC-SA 4.0 (https://creativecommons.org/licenses/by-nc-sa/4.0/), the
+    licence the paper itself is distributed under. These files are NOT covered
+    by the Apache License 2.0 that applies to the rest of this repository.
+    See figures/paper/README.md.
+
+Input data
+    Not distributed in this repository. Derived from NASA ICESat-2 ATL03
+    (doi:10.5067/ATLAS/ATL03.006, distributed by NSIDC) and ESA Copernicus
+    Sentinel-2 Level-2A imagery, with manual label corrections by the paper's
+    authors.
