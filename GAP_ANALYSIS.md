@@ -416,10 +416,53 @@ Accuracy and the minority-class figures again move by a few points against run00
 describes. The fallback count differs from the local recomputation on run0005 predictions (7) because
 the predictions differ.
 
-### Still open
+## 12. Open items (as of 2026-09-18)
 
-- Which six features the paper trained on.
-- ATL07/ATL10 reference data for the empty panels (unchanged).
-- An MLP arm (unchanged).
-- A same-worker single-rank Horovod run to separate the GPU-model confound from the
-  data-feeding explanation of the 1.04x speedup.
+The single list of what is still unresolved, superseding the "not applied" and "still open" notes
+in the sections above.
+
+**Need data or the authors**
+
+1. **ATL07 and ATL10 for the two paper tracks.** Every empty panel (Figs 6b, 7b, 8b, 9b, 10b-d,
+   11b-d) and the paper's sea-surface and density validation claims depend on them. Koo-format CSVs
+   (`csv_Iqrah/ATL07-02_*.csv`) are preferable; NASA granules work through `--raw-atl07-dir` but
+   lose the thin-ice class. Exact files and commands: `PAPER_COMPARISON.md`, "What is still
+   missing".
+2. **Which six features the paper trained on.** The paper says six, the notebook builds eight, and
+   the notebook's final model cell declares six. Only the authors can settle it; it decides whether
+   the accuracy comparison is on the same input.
+3. **Whether and where the corrected dataset is published** is the authors' decision (README,
+   Step 1).
+
+**Need a run**
+
+4. **Same-worker single-rank Horovod baseline.** The 1.04x compares run0009 (2 ranks) with run0005
+   (no Horovod) and neither records its GPU model; the pool has T4 and RTX 6000 workers. One
+   `--horovod --n-gpus 1` run on the worker run0009 used would separate hardware from the
+   data-feeding explanation.
+5. **Fixed seed, or repeats.** No seed is set for weight initialisation or dropout, and per-class
+   accuracy moves 4-8 points between runs (run0002 / run0005 / run0010). Either seed the training
+   or report a mean over several runs before quoting per-class figures.
+6. **Paper-faithful arms** if wanted alongside the notebook-parity defaults: `--lead-fallback none`
+   (interpolate windows without water instead of using thin ice), `--preset paper` (LSTM 16 ELU, 7
+   dense layers, dropout in the LSTM only), `--norm zscore`. Each changes the published numbers, so
+   each is a deliberate switch, not a default.
+
+**Design decisions**
+
+7. **A label-free `rel_height_min_elev`.** The feature is computed from ground-truth open-water
+   labels, so inference on unlabelled tracks (the paper's all-tracks set, `--inference-dir` in
+   Section 5 item 16) needs a substitute, e.g. the author's threshold-based pre-labels.
+8. **Normalisation.** The notebook's `(x-mean)/(1-std)` effectively removes `bcnt_mean` and
+   `brate_mean`. Keeping it preserves parity with the paper; switching to `--norm zscore` gives the
+   model all eight features but different numbers.
+9. **An MLP arm** for Table III, only if the LSTM-versus-MLP comparison itself has to be
+   reproduced rather than quoted.
+
+**Housekeeping on the submit host**
+
+10. `containers/seaice_gpu.sif` is a copy of the Horovod image (the plain image had not been kept
+    when run0010 was submitted). Functionally identical for the non-Horovod path; rebuild from
+    `Apptainer/seaice_gpu.def` to match the README.
+11. `~/seaice-icesat2-workflow` on the submit host is an rsync copy, not a git checkout, so code
+    changes have to be synced by hand. Cloning the repository there removes that step.

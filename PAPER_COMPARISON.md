@@ -477,3 +477,8 @@ the MLP-versus-LSTM comparison itself needs to be reproduced.
 
 **Sentinel-2 imagery**, for the paper's Fig. 2 (auto-labelling overlay). The workflow starts from
 already-labelled tracks, so it has no S2 scenes.
+
+**Everything else that is still open** (the six-feature question, a same-worker Horovod baseline,
+seeding or repeating the training, the paper-faithful switches, a label-free sea-surface feature,
+the normalisation decision, and two housekeeping items on the submit host) is consolidated in
+[`GAP_ANALYSIS.md`](GAP_ANALYSIS.md#12-open-items-as-of-2026-09-18), section 12.
