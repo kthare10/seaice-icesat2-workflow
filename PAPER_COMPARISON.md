@@ -6,7 +6,10 @@ ATL03 Data"* (Iqrah, Koo, Wang, Xie & Prasad, IPDPSW 2025; arXiv:2502.02700v1).
 
 Two runs on pegasus-submit, 2026-09-17: **run0005** (single GPU) supplies the classification and
 freeboard results; **run0009** (`--horovod --n-gpus 2`) supplies the distributed-training results in
-section 4.
+section 4. A third run, **run0010** (2026-09-18, after the fixes recorded in `GAP_ANALYSIS.md`
+section 11), confirmed the workflow end to end: 39 jobs, 100 % success, test accuracy 95.56 % with
+per-class 96.76 / 79.61 / 82.93, Figures 4-15 in the bundle. Its numbers are quoted only where they
+add something; the tables below stay on run0005 so that the side-by-side figures and the text agree.
 
 **Inputs**: the author's six manually corrected tracks (`IS2_Corrected_data.zip`) covering the two
 tracks used in the paper's figures, `20191104195311_05940510` and `20191126182014_09290510`, beams

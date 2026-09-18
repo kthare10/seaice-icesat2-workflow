@@ -396,10 +396,30 @@ filtering; the 1-GPU Horovod baseline is run0005 and neither run records the GPU
 of the paper is internally inconsistent (280.72 s over 20 epochs is 14.0 s/epoch, not 5.5), which
 changes the reading of the single-GPU comparison.
 
+### Validation run (run0010, 2026-09-18)
+
+Submitted with `--prebuilt-containers ./containers` on the six author files: **18 tasks / 39 jobs,
+100 % success, 28 min 44 s wall** on a pool shared with another running workflow. The GPU image was
+a copy of the Horovod image (the plain `seaice_gpu.sif` had not been kept), which carries the same
+TensorFlow 2.14.
+
+| Check | Result |
+|---|---|
+| Figures job receives `training_metrics.json` | bundle holds Figures 4-15 and Tables I-V (22 files) |
+| Gap-aware smoothing | Nov 4 gt1r log: "Smoothing 2 pieces separately (gap > 10000 m at row 38141)" |
+| Fallback logging | 25 windows, 6 used thin ice, 90 rows interpolated on Nov 4 gt1r |
+| Training (NCSA Quadro RTX 6000, 50 epochs) | 774 s; test accuracy 95.56 %, F1 95.35 %; per class 96.76 / 79.61 / 82.93 |
+| Freeboard means (m) | 0.497, 0.520, 0.931, 0.893 for the four tracks |
+
+Accuracy and the minority-class figures again move by a few points against run0005 (95.93 %,
+97.28 / 80.19 / 76.49) with no seed fixed, which is the spread `PAPER_COMPARISON.md` already
+describes. The fallback count differs from the local recomputation on run0005 predictions (7) because
+the predictions differ.
+
 ### Still open
 
 - Which six features the paper trained on.
 - ATL07/ATL10 reference data for the empty panels (unchanged).
 - An MLP arm (unchanged).
-- Re-running the workflow with the fixed figures job; the local `paper_figures.py --all` run on
-  run0005 outputs produces Figures 4-15 (22 files), so the DAG will now too.
+- A same-worker single-rank Horovod run to separate the GPU-model confound from the
+  data-feeding explanation of the 1.04x speedup.
