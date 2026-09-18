@@ -291,7 +291,8 @@ class SeaIceClassificationWorkflow:
 
     def create_workflow(self, input_files, epochs=None, batch_size=32, preset="notebook",
                         units=None, dropout=None, lr=None, radius=5000,
-                        weight_form="paper", smooth_window=10000, zscore=False,
+                        weight_form="paper", smooth_window=10000, smooth_max_gap=10000,
+                        water_threshold=None, lead_fallback="thin_ice", zscore=False,
                         horovod=False, n_gpus=1, skip_autolabel=False,
                         build_containers=True,
                         atl07_files=None, atl10_files=None,
@@ -430,12 +431,14 @@ class SeaIceClassificationWorkflow:
         freeboard_files = []
         for tid in track_ids:
             fb_out = File(f"freeboard_{tid}.csv")
-            job = self.stage_job(
-                "compute_freeboard", f"freeboard_{tid}",
-                ["--input", predictions_csv, "--output", fb_out,
-                 "--radius", str(int(radius)), "--method", "nasa_sea_surface_eqn",
-                 "--weight-form", weight_form, "--smooth-window", str(int(smooth_window)),
-                 "--track", tid])
+            fb_args = ["--input", predictions_csv, "--output", fb_out,
+                       "--radius", str(int(radius)), "--method", "nasa_sea_surface_eqn",
+                       "--weight-form", weight_form, "--smooth-window", str(int(smooth_window)),
+                       "--smooth-max-gap", str(int(smooth_max_gap)),
+                       "--lead-fallback", lead_fallback, "--track", tid]
+            if water_threshold is not None:
+                fb_args += ["--water-threshold", str(water_threshold)]
+            job = self.stage_job("compute_freeboard", f"freeboard_{tid}", fb_args)
             job.add_inputs(predictions_csv)
             job.add_outputs(fb_out, stage_out=True, register_replica=False)
             self.wf.add_jobs(job)
@@ -465,8 +468,9 @@ class SeaIceClassificationWorkflow:
         figures_tar = File("paper_figures.tar.gz")
         fig_args = ["--all", "--predictions", predictions_csv,
                     "--test-predictions", test_pred_file,
+                    "--metrics", metrics_file,
                     "--output-dir", ".", "--output-tar", figures_tar]
-        extra_inputs = [predictions_csv, test_pred_file]
+        extra_inputs = [predictions_csv, test_pred_file, metrics_file]
         if freeboard_files:
             fig_args.append("--freeboard")
             for _, fb_file in freeboard_files:
@@ -521,6 +525,17 @@ Examples:
                         help="Lead weight formula for the NASA sea surface (default: paper)")
     parser.add_argument("--smooth-window", type=int, default=10000,
                         help="+/-rows for sea-surface smoothing (Notebook 6: 10000; 0 disables)")
+    parser.add_argument("--smooth-max-gap", type=int, default=10000,
+                        help="Smooth pieces of a track separated by along-track gaps larger than "
+                             "this (m) independently (default: 10000; 0 = whole track, as the "
+                             "notebook does)")
+    parser.add_argument("--water-threshold", type=float, default=None,
+                        help="Mask the NASA sea surface above this height (m) before smoothing, as "
+                             "Notebook 6 does with 0.2 m + mean(ATL03 - ATL07); off by default "
+                             "because the offset needs ATL07 data")
+    parser.add_argument("--lead-fallback", choices=["thin_ice", "none"], default="thin_ice",
+                        help="Sea-surface windows without predicted open water: use thin ice as "
+                             "leads (notebook, default) or interpolate from neighbours (paper)")
     parser.add_argument("--zscore", action="store_true",
                         help="Enable the notebook's disabled z-score stage in preprocess_atl03")
     parser.add_argument("--n-gpus", type=int, default=1)
@@ -593,8 +608,10 @@ Examples:
     logger.info("Input files: %d", len(input_files))
     logger.info("Preset: %s, Epochs: %s, Batch size: %d",
                 args.preset, args.epochs or "preset", args.batch_size)
-    logger.info("Radius: %.0f m, weights: %s, smooth window: %d, z-score: %s",
-                args.radius, args.weight_form, args.smooth_window, args.zscore)
+    logger.info("Radius: %.0f m, weights: %s, smooth window: %d rows, max gap: %d m, "
+                "water threshold: %s, lead fallback: %s, z-score: %s",
+                args.radius, args.weight_form, args.smooth_window, args.smooth_max_gap,
+                args.water_threshold, args.lead_fallback, args.zscore)
     logger.info("GPUs: %d, Horovod: %s", args.n_gpus, args.horovod)
     logger.info("Containers: %s", "built by the workflow" if build_containers
                 else f"pre-built from {args.prebuilt_containers}")
@@ -620,6 +637,8 @@ Examples:
             input_files=input_files, epochs=args.epochs, batch_size=args.batch_size,
             preset=args.preset, units=args.units, dropout=args.dropout, lr=args.lr,
             radius=args.radius, weight_form=args.weight_form, smooth_window=args.smooth_window,
+            smooth_max_gap=args.smooth_max_gap, water_threshold=args.water_threshold,
+            lead_fallback=args.lead_fallback,
             zscore=args.zscore, horovod=args.horovod, n_gpus=args.n_gpus,
             skip_autolabel=skip_autolabel, build_containers=build_containers,
             atl07_files=atl07_files, atl10_files=atl10_files,

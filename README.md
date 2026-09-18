@@ -436,7 +436,7 @@ Processing steps per beam:
 | `--input-dir` | — | Directory containing ATL03 HDF5 files |
 | `--input` | — | Specific HDF5 file(s) (supports glob patterns) |
 | `--output-dir` | required | Output directory for CSV files |
-| `--beams` | `gt1l,gt2l,gt3l` | Comma-separated beam names (strong beams by default) |
+| `--beams` | `strong` | `strong` picks the strong beams from `orbit_info/sc_orient`; or a comma-separated list such as `gt1r,gt2r` |
 | `--bin-size` | `2.0` | Along-track bin size in meters |
 
 </details>
@@ -572,6 +572,9 @@ python workflow_generator.py --input-dir ./data/labeled/ \
 | `--radius` | 5000 | Sliding window radius in metres |
 | `--weight-form` | `paper` | Lead weight in the NASA sea-surface equation. `paper`: exp(-((h-hmin)/sigma)^2), Eq. 2. `notebook`: the author's exp(-(h-hmin)/sigma)^2 |
 | `--smooth-window` | 10000 | Rows either side for the nanmin smoothing of `new_h_ref` (Notebook 6); 0 disables |
+| `--smooth-max-gap` | 10000 | Pieces of a track separated by an along-track jump larger than this (m) are smoothed independently, so tiles tens of km apart do not share a sea surface. 0 smooths the whole track as one, as the notebook does |
+| `--water-threshold` | off | Mask the NASA sea surface above this height (m) before smoothing. Notebook 6 does this with 0.2 m + mean(ATL03 − ATL07), which needs ATL07 data, so it is off by default |
+| `--lead-fallback` | `thin_ice` | Sea-surface windows with no predicted open water: `thin_ice` uses thin-ice segments as leads (the notebook); `none` leaves them to interpolation from neighbouring windows (what the paper describes) |
 | `--zscore` | off | Enable the z-score stage that the author's final pipeline leaves disabled |
 | `--prebuilt-containers DIR` | — | Reuse `seaice_cpu.sif` / `seaice_gpu.sif` from DIR and drop the build jobs |
 | `--n-gpus` | 1 | GPUs requested for training |
@@ -678,17 +681,36 @@ In the job log, `seaice_run.sh` prints the exact command, and each rank reports 
   (`<feature><offset>`, offsets -2 to +2); metadata (`track`, `x_atc`, `year`, `month`, `day`,
   `lon`, `lat`) travels alongside and is never fed to the model.
 - **Features**: `h_cor_mean`, `h_diff`, `rel_height_min_elev`, `height_sd`, `pcnth_mean`,
-  `pcnt_mean`, `bcnt_mean`, `brate_mean`.
+  `pcnt_mean`, `bcnt_mean`, `brate_mean`. These are the eight the notebooks build; the paper says
+  six per timestep without naming them, and the notebook's final model cell declares an input
+  shape of `(5, 6)`, so which six the paper trained on is not recoverable.
+- **`rel_height_min_elev` is derived from the labels.** It is the height above the lowest
+  open-water segment in the surrounding 10 km window, where "open water" is taken from the
+  ground-truth `label` column (Notebook 2). The classifier therefore sees a feature computed from
+  its neighbours' true labels. This follows the notebooks and the paper's numbers carry the same
+  property, so the comparison is like for like, but the accuracy is not a fair estimate of
+  performance on unlabelled tracks, where this feature cannot be computed.
 - **`--preset notebook`** (default): LSTM(48, tanh) → Dropout(0.4) → Dense(16, elu) → Dropout(0.4)
   → Dense(16, elu) → Dropout(0.4) → Dense(3, softmax); Adam 0.000889; 50 epochs.
 - **`--preset paper`**: LSTM(16, elu) → Dropout(0.2) → Dense(32, 96, 32, 16, 112, 48, 64; elu) →
-  Dense(3, softmax); Adam 0.003; 20 epochs.
+  Dense(3, softmax); Adam 0.003; 20 epochs. The paper puts dropout in the LSTM layer only, so this
+  preset adds none after the dense layers (`--dense-dropout` overrides).
 - **Loss**: `CategoricalFocalCrossentropy(alpha=[0.05, 0.45, 0.60], gamma=2.0)`, for the heavy class
-  imbalance toward thick ice.
-- **Normalisation**: `(x - mean) / (1 - std)` with the *training* statistics saved to
-  `norm_params.json` and reloaded at inference.
+  imbalance toward thick ice. The paper does not state its alpha; the notebook's is used.
+- **Normalisation**: `(x - mean) / (1 - std)`, the notebook's formula, with the statistics saved to
+  `norm_params.json` and reloaded at inference. Note what this does to the inputs: features with
+  std below 1 are scaled up (elevation by about 2x), features with std above 1 are sign-flipped
+  and shrunk. On this data `bcnt_mean` (std ≈ 326) and `brate_mean` (std ≈ 1.4e6) are scaled by
+  about −0.003 and −7e−7, so two of the eight features are effectively zero at the model input.
+  `--norm zscore` gives a standard z-score instead; it is not the default because the published
+  numbers were obtained with the notebook formula.
 - **Split**: 60/20/20 train/validation/test, random state 20. Reported metrics are on the held-out
-  test split, never on training rows.
+  test split, never on training rows. The normalisation statistics are computed on the whole
+  labelled set before the split, as in the notebook.
+- **F1, precision, recall** in `training_metrics.json` are the notebook's custom Keras metrics:
+  per-batch values on rounded softmax outputs, averaged over batches. They are what the paper's
+  Table III reports, and differ from scikit-learn's macro or weighted F1, which the per-class
+  report in the same file provides.
 
 ### Freeboard
 
@@ -696,6 +718,23 @@ Local sea surface comes from open-water segments in a 10 km window (5 km radius)
 weighted-lead equation, then the Notebook 6 smoothing (a `nanmin` rolling window followed by
 nearest-neighbour interpolation). Freeboard is `h_cor_mean` minus that surface. Three simpler
 surfaces (minimum, average and nearest-minimum elevation) are computed alongside for comparison.
+
+Details that matter when reading the result against the paper:
+
+- **Windows advance 5 km, not 10.** Each iteration assigns its 10 km window's estimate to every
+  row in it and then jumps to the window's end; the next window's back half overwrites this one's
+  front half. Every row therefore carries the estimate from the 10 km window that starts at its
+  own 5 km chunk, which is the 10 km window with 5 km overlap the paper describes.
+- **Windows without open water use thin ice as leads** (`--lead-fallback thin_ice`, the notebook's
+  behaviour). The paper says such windows are interpolated from their neighbours; `--lead-fallback
+  none` does that. On the author's four tracks 15 of 70 windows take the fallback, and it is the
+  main reason the raw NASA surface is rougher than the three simpler ones before smoothing.
+- **The smoothing window is 10,000 rows either side**, about 20 km at 2 m spacing, and is defined
+  in rows, not metres. `--smooth-max-gap` (default 10 km) splits a track at larger along-track
+  jumps so that a track assembled from distant Sentinel-2 tiles is smoothed piecewise.
+- **Notebook 6 masks the surface before smoothing** at 0.2 m above the mean ATL03−ATL07 height
+  difference for the figures that compare against ATL07. That needs ATL07 data, so it is off by
+  default (`--water-threshold`).
 
 ### ATL07/ATL10 reference data
 

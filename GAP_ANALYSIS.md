@@ -28,7 +28,9 @@ six files (this session, in the project venv) reproduces the root causes:
 Pipeline used for the corrected-label ("cor_label") results, in order:
 
 1. `done/*_labeled_10m_done.csv` (manually corrected) → NB2 cell 14: per-file sliding window
-   (radius 5000 m, non-overlapping advance) → `rel_sea_surf_{min_elev,avg_elev,min_dist}`
+   (radius 5000 m; each 10 km window is assigned to all its rows and the next window's back half
+   overwrites this one's front half, so the result is 10 km windows at a 5 km stride)
+   → `rel_sea_surf_{min_elev,avg_elev,min_dist}`
 2. NB2 cell 16: linear interpolation (`limit_direction="both"`) → `rel_height_*`
 3. NB2 cell 19: `h_diff = h_cor_mean - h_cor_med`
 4. NB3 cell 6: `make_input(..., nearby=2)` with 8 features → `*_ann_new_param.csv` (label + 40 cols, **no track**)
@@ -57,20 +59,29 @@ Notes that matter for the workflow:
 
 | Item | Paper §III.B | Notebook (final cells) | Workflow default |
 |---|---|---|---|
-| Features / timestep | 6 | 8 | 8 |
+| Features / timestep | 6 | 8 built (cell 6/20); final model cell 37 declares `(5, 6)` | 8 |
 | Timesteps | 5 (n±2) | 5 | 5 |
 | LSTM | 16 units, ELU | 48 tanh (cell 37); tuner best 80 elu (cell 32) | 48 tanh |
-| Dropout | 0.2 | 0.4 | 0.4 |
+| Dropout | 0.2, LSTM layer only | 0.4 after LSTM and after every dense layer | 0.4 (notebook preset); paper preset: 0.2 after LSTM, none after dense |
 | Dense stack | 7 layers: 32, 96, 32, 16, 112, 48, 64 (ELU) | 2 × 16 ELU | 2 × 16 ELU |
 | Optimiser / LR | Adam 0.003 | Adam 0.000889 | Adam 0.000889 |
 | Loss | focal | CategoricalFocalCrossentropy α=[.05,.45,.60] γ=2 | same |
 | Epochs / batch | 20 / 32 | 50 / 32 | 50 / 32 |
-| Split | 80/20 | 60/20/20 (rs=20) | 60/20/20 (rs=42) |
+| Split | 80/20 | 60/20/20 (rs=20) | 60/20/20 (rs=20) |
 | Normalisation | not stated | (x−mean)/(1−std) recomputed per dataset | same formula, params saved from training (improvement) |
 | Reported accuracy | 96.56 % (test) | 95.47 % test (cell 38) | 0.0 (broken) |
 
 The paper's architecture resembles tuner trial 1 in NB3 cell 31 (16 units, dropout 0.2, LR 0.0032).
 Neither the workflow default nor the notebook's final model is the paper's model.
+
+Two properties of the input, shared by the notebook and the workflow, that the paper does not
+mention:
+
+- `rel_height_min_elev` is computed from the **ground-truth** open-water labels of the surrounding
+  window (NB2), so the classifier receives a feature derived from its neighbours' labels.
+- The normalisation `(x - mean) / (1 - std)` (NB3 cell 19, `M=1`) scales `bcnt_mean` by about
+  −0.003 and `brate_mean` by about −7e−7 on this data, so those two features are effectively
+  absent from the model input; `pcnt_mean`/`pcnth_mean` are sign-flipped and halved.
 
 ## 4. Other discrepancies
 
@@ -334,10 +345,10 @@ similar caches inside the job sandbox.
 
 18 tasks / 39 jobs, 100 % success, 19 min 4 s wall time, reusing prebuilt images. Both ranks took
 disjoint shards and reported identical test metrics, confirming the DistributedOptimizer averages
-gradients rather than leaving two independent models. Measured speedup at 2 GPUs was 1.05x against
-the paper's reported 1.96x; the model is far too small for the step to be GPU-bound, so the
-all-reduce cancels the benefit of sharding. Details and the suggested remedy are in
-`PAPER_COMPARISON.md`.
+gradients rather than leaving two independent models. Measured speedup at 2 GPUs was 1.04x
+(740.0 s / 709.3 s) against the paper's reported 1.96x; the model is far too small for the step to
+be GPU-bound, so the all-reduce cancels the benefit of sharding. Details, and the caveats on that
+comparison, are in `PAPER_COMPARISON.md`.
 
 A third run-time defect was found and fixed here: `apptainer exec --env HOME=...` is refused by
 Apptainer ("Overriding HOME environment variable with APPTAINERENV_HOME is not permitted"), so the
@@ -348,3 +359,47 @@ built image before resubmitting.
 Note for future recovery work: patching an executable in the workflow scratch and releasing a held
 job does not work, because Pegasus records a checksum at stage-in and rejects the modified file.
 Replan instead, and pass `--prebuilt-containers` so the container builds are not repeated.
+
+## 11. Second review: code vs paper vs comparison (2026-09-18)
+
+A line-by-line re-check of `bin/*.py`, the generator, the paper (including its Fig. 4 at full
+resolution) and notebooks 3, 5 and 6, recomputing every number in `PAPER_COMPARISON.md` from
+`results5/` and `results9/`. All headline numbers reproduced; the items below did not.
+
+### Code defects found and fixed
+
+| Defect | Fix |
+|---|---|
+| `paper_figures.CM_PAPER` off-diagonals (1.44/0.17, 20.30/5.90, 18.75/21.00) did not match the paper's Fig. 4 (1.35/0.26, 19.25/6.95, 5.17/34.48) | Transcribed from the figure; the water diagonal is 60.35 in the figure and 60.25 in the text, both noted in the source |
+| The generator never passed `--metrics` to `paper_figures`, so Figures 12 and 13 were skipped in every workflow run (the run0005 bundle holds Figures 4-11 only) | `training_metrics.json` is now an input of the figures job |
+| Figures 8b/9b looked for an `h_ref` column in the freeboard CSV, which the workflow never produces, so the ATL07 panel could not be populated even with ATL07 data | The ATL07 frame is passed to `_fig_sea_surface` and plotted directly |
+| `--preset paper` added Dropout(0.2) after each of the 7 dense layers; the paper has dropout in the LSTM layer only | `dense_dropout` per preset (notebook 0.4, paper 0), `--dense-dropout` override |
+| Notebook 6's smoothing window is 10,000 rows, and the Nov 4 gt1r track is two Sentinel-2 tiles 92 km apart, so the smaller tile's smoothed sea surface was partly set by the other tile | `--smooth-max-gap` (default 10 km) smooths pieces separated by larger gaps independently |
+| The thin-ice fallback in the NASA sea-surface equation (NB5 cell 24) was undocumented and not switchable; the paper describes interpolation instead | `--lead-fallback {thin_ice,none}`, logged per track; default stays `thin_ice` for notebook parity |
+| Notebook 6's water-threshold mask was implemented but unreachable from the generator | `--water-threshold` passed through |
+
+### Method properties now disclosed in the docs
+
+- `rel_height_min_elev` is derived from ground-truth labels (Section 3 above).
+- The `(x-mean)/(1-std)` normalisation effectively removes `bcnt_mean` and `brate_mean`.
+- 15 of the 70 sea-surface windows on the author's tracks have no predicted open water and use
+  thin ice as leads.
+- The notebook's final model cell declares 6 features while its reshape builds 8; the paper says 6.
+
+### Corrections to `PAPER_COMPARISON.md`
+
+Open water lost to thin ice is 19.8 %, not 12.7 %; positive freeboard is 97.4 % overall (95.0 % on
+Nov 4 gt2r), not 99 %; the notebook evaluates on a held-out split (95.47 %), it does not score the
+whole set; the claim that the paper's training set is larger was unsupported and is replaced by
+what can be inferred; the Nov 4 gt1r "225 km span" is a 92 km inter-tile gap, not photon
+filtering; the 1-GPU Horovod baseline is run0005 and neither run records the GPU model; Table IV
+of the paper is internally inconsistent (280.72 s over 20 epochs is 14.0 s/epoch, not 5.5), which
+changes the reading of the single-GPU comparison.
+
+### Still open
+
+- Which six features the paper trained on.
+- ATL07/ATL10 reference data for the empty panels (unchanged).
+- An MLP arm (unchanged).
+- Re-running the workflow with the fixed figures job; the local `paper_figures.py --all` run on
+  run0005 outputs produces Figures 4-15 (22 files), so the DAG will now too.

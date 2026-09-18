@@ -35,12 +35,15 @@ N_CLASSES = 3
 CLASS_NAMES = ["thick_ice", "thin_ice", "open_water"]
 
 # Model presets. "notebook" = NB3 cell 37 (tuned, used for the cor_label results);
-# "paper" = architecture stated in the paper (LSTM 16 ELU, dropout 0.2, 7 dense layers, Adam 0.003).
+# "paper" = architecture stated in the paper (LSTM 16 ELU, dropout 0.2 in the LSTM layer only,
+# 7 dense layers, Adam 0.003). The paper places no dropout after the dense layers, so
+# dense_dropout is 0 there; the notebook applies its 0.4 after every dense layer too.
+# The paper's focal-loss alpha is not stated; the notebook's is used for both presets.
 PRESETS = {
-    "notebook": dict(units=48, lstm_activation="tanh", dropout=0.4,
+    "notebook": dict(units=48, lstm_activation="tanh", dropout=0.4, dense_dropout=0.4,
                      dense_units="16,16", dense_activation="elu",
                      lr=0.000889, alpha="0.05,0.45,0.60", epochs=50),
-    "paper": dict(units=16, lstm_activation="elu", dropout=0.2,
+    "paper": dict(units=16, lstm_activation="elu", dropout=0.2, dense_dropout=0.0,
                   dense_units="32,96,32,16,112,48,64", dense_activation="elu",
                   lr=0.003, alpha="0.05,0.45,0.60", epochs=20),
 }
@@ -118,17 +121,20 @@ def reshape_to_lstm(np_array, n_timesteps, n_features):
 
 def build_lstm_model(n_timesteps, n_features, units, lstm_activation, dropout,
                      dense_units, dense_activation, lr, alpha, n_classes=N_CLASSES,
-                     hvd=None):
+                     hvd=None, dense_dropout=None):
     import tensorflow as tf
     from keras.models import Sequential
     from keras.layers import LSTM, Dropout, Dense
 
+    if dense_dropout is None:
+        dense_dropout = dropout
     model = Sequential()
     model.add(LSTM(units, activation=lstm_activation, input_shape=(n_timesteps, n_features)))
     model.add(Dropout(dropout))
     for du in dense_units:
         model.add(Dense(du, activation=dense_activation))
-        model.add(Dropout(dropout))
+        if dense_dropout > 0:
+            model.add(Dropout(dense_dropout))
     model.add(Dense(n_classes, activation="softmax"))
 
     focal_loss = tf.keras.losses.CategoricalFocalCrossentropy(
@@ -168,7 +174,9 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--units", type=int, default=None, help="LSTM units")
     parser.add_argument("--lstm-activation", default=None)
-    parser.add_argument("--dropout", type=float, default=None)
+    parser.add_argument("--dropout", type=float, default=None, help="Dropout after the LSTM layer")
+    parser.add_argument("--dense-dropout", type=float, default=None,
+                        help="Dropout after each dense layer (notebook 0.4, paper 0)")
     parser.add_argument("--dense-units", default=None, help="Comma-separated dense layer sizes")
     parser.add_argument("--dense-activation", default=None)
     parser.add_argument("--lr", type=float, default=None)
@@ -180,7 +188,7 @@ def main():
     args = parser.parse_args()
 
     cfg = dict(PRESETS[args.preset])
-    for key in ("epochs", "units", "lstm_activation", "dropout", "dense_units",
+    for key in ("epochs", "units", "lstm_activation", "dropout", "dense_dropout", "dense_units",
                 "dense_activation", "lr", "alpha"):
         val = getattr(args, key)
         if val is not None:
@@ -262,7 +270,7 @@ def main():
     lr = cfg["lr"] * (hvd.size() if hvd is not None else 1)
     model = build_lstm_model(n_timesteps, n_features, cfg["units"], cfg["lstm_activation"],
                              cfg["dropout"], dense_units, cfg["dense_activation"], lr, alpha,
-                             hvd=hvd)
+                             hvd=hvd, dense_dropout=cfg.get("dense_dropout"))
     model.summary(print_fn=logger.info)
 
     callbacks = []

@@ -12,6 +12,20 @@ Uses pred_label (not label) for open-water detection. Inputs must be in metres
 
 Lead weight: the paper (Eq. 2) uses w_i = exp(-((h_i - h_min)/sigma_i)^2). The notebook wrote
 ``np.exp(-(hi-hmin)/si)**2`` (= exp(-2 (h-hmin)/sigma)); ``--weight-form notebook`` reproduces it.
+
+Windows: each iteration takes the 10 km window centred on the first unprocessed row and assigns
+its estimate to every row in it, then jumps to the window's end. Because the back half of the next
+window overwrites the front half of this one, every row ends up with the estimate from the 10 km
+window that starts at its own 5 km chunk, i.e. 10 km windows at a 5 km stride, as the paper
+describes (Section III.D.1).
+
+Lead fallback: when a window has no predicted open water, the notebook (NB5 cell 24) treats
+thin-ice segments as leads. The paper instead says such windows are filled by interpolation from
+the nearest window. ``--lead-fallback thin_ice`` (default, notebook parity) or ``none`` (paper).
+
+Smoothing: the Notebook 6 nanmin window is defined in rows, not metres. A track assembled from
+tiles that are far apart would smooth across the gap, so ``--smooth-max-gap`` splits the series
+at along-track jumps larger than that distance and smooths each piece independently.
 """
 
 import argparse
@@ -95,8 +109,13 @@ def lead_weights(hi, si, weight_form):
     return np.exp(-((hi - hmin) / si) ** 2)
 
 
-def compute_nasa_sea_surface(input_data, radius, weight_form="paper"):
-    """Reference sea surface h_ref per 10 km window from open-water leads (fallback: thin ice)."""
+def compute_nasa_sea_surface(input_data, radius, weight_form="paper", lead_fallback="thin_ice"):
+    """Reference sea surface h_ref per 10 km window from open-water leads.
+
+    ``lead_fallback="thin_ice"`` uses thin-ice segments as leads when a window has no predicted
+    open water (notebook behaviour); ``"none"`` leaves the window NaN so that the later linear
+    interpolation fills it from neighbouring windows (what the paper describes).
+    """
     x_all = input_data["x_atc"].to_numpy(dtype=float)
     h_all = input_data["h_cor_mean"].to_numpy(dtype=float)
     s_all = input_data["height_sd"].to_numpy(dtype=float)
@@ -104,6 +123,7 @@ def compute_nasa_sea_surface(input_data, radius, weight_form="paper"):
     n = len(input_data)
     h_ref_col = np.full(n, np.nan)
     s_ref_col = np.full(n, np.nan)
+    n_windows = n_fallback = 0
 
     index = 0
     while index < n:
@@ -113,10 +133,13 @@ def compute_nasa_sea_surface(input_data, radius, weight_form="paper"):
         if hi_ <= lo:
             index += 1
             continue
+        n_windows += 1
         w_lab = lab_all[lo:hi_]
         lead_idx = np.where(w_lab > 1)[0]
-        if len(lead_idx) == 0:
+        if len(lead_idx) == 0 and lead_fallback == "thin_ice":
             lead_idx = np.where(w_lab > 0)[0]
+            if len(lead_idx):
+                n_fallback += 1
 
         if len(lead_idx) > 0:
             # consecutive-row groups form individual leads
@@ -139,6 +162,9 @@ def compute_nasa_sea_surface(input_data, radius, weight_form="paper"):
             s_ref_col[lo:hi_] = np.sum((alead ** 2) * slead)
         index = hi_
 
+    n_empty = int(np.isnan(h_ref_col).sum())
+    logger.info("NASA sea surface: %d windows, %d used thin ice as leads, %d rows without leads "
+                "(interpolated)", n_windows, n_fallback, n_empty)
     input_data["new_h_ref"] = h_ref_col
     input_data["new_s_ref"] = s_ref_col
     input_data["new_h_ref"] = input_data["new_h_ref"].interpolate(
@@ -150,21 +176,45 @@ def compute_nasa_sea_surface(input_data, radius, weight_form="paper"):
 # Smoothed sea surface (Notebook 6)
 # ---------------------------------------------------------------------------
 
-def compute_smoothed_sea_surface(input_data, window, water_threshold=None):
+def _smooth_piece(s, window):
+    """Notebook 6 smooth_line on one contiguous piece: nanmin over ±window rows, then nearest."""
+    if not s.notna().any() or window <= 0:
+        return s
+    out = s.rolling(2 * window + 1, center=True, min_periods=1).min()
+    try:
+        return out.interpolate(method="nearest", limit_direction="both")
+    except Exception:  # scipy missing or single valid point
+        return out.interpolate(method="linear", limit_direction="both")
+
+
+def compute_smoothed_sea_surface(input_data, window, water_threshold=None, max_gap=None):
     """nanmin over ±window rows, then nearest-neighbour interpolation (Notebook 6 smooth_line).
 
-    ``water_threshold`` (metres) reproduces the notebook's optional masking of h_ref values above
-    the expected water level before smoothing.
+    ``water_threshold`` (metres) reproduces the notebook's masking of h_ref values above the
+    expected water level before smoothing (NB6 cells 9-19; the notebook derives the level as
+    0.2 m + mean(ATL03 - ATL07), which needs ATL07 data).
+
+    ``max_gap`` (metres): along-track jumps larger than this split the series into pieces that
+    are smoothed independently, so a track assembled from distant tiles does not borrow its
+    sea surface from tens of kilometres away. None smooths the whole series as one (notebook).
     """
     s = input_data["new_h_ref"].copy()
     if water_threshold is not None:
+        n_masked = int((s > water_threshold).sum())
         s = s.where(s <= water_threshold)
-    if s.notna().any() and window > 0:
-        s = s.rolling(2 * window + 1, center=True, min_periods=1).min()
-        try:
-            s = s.interpolate(method="nearest", limit_direction="both")
-        except Exception:  # scipy missing or single valid point
-            s = s.interpolate(method="linear", limit_direction="both")
+        logger.info("Masked %d new_h_ref values above %.3f m before smoothing", n_masked, water_threshold)
+
+    if max_gap is not None and max_gap > 0:
+        gaps = np.flatnonzero(np.diff(input_data["x_atc"].to_numpy(dtype=float)) > max_gap)
+        if len(gaps):
+            logger.info("Smoothing %d pieces separately (along-track gaps > %.0f m at rows %s)",
+                        len(gaps) + 1, max_gap, gaps.tolist())
+        bounds = [0] + (gaps + 1).tolist() + [len(s)]
+        pieces = [_smooth_piece(s.iloc[a:b], window) for a, b in zip(bounds[:-1], bounds[1:])]
+        s = pd.concat(pieces)
+    else:
+        s = _smooth_piece(s, window)
+
     input_data["new_h_ref_smooth"] = s
     input_data["freeboard_new_h_ref_smooth"] = input_data["h_cor_mean"] - input_data["new_h_ref_smooth"]
 
@@ -184,8 +234,15 @@ def main():
                         help="Lead weight formula (default: paper Eq. 2)")
     parser.add_argument("--smooth-window", type=int, default=10000,
                         help="±rows for the nanmin smoothing of new_h_ref (Notebook 6: 10000; 0 disables)")
+    parser.add_argument("--smooth-max-gap", type=float, default=10000.0,
+                        help="Smooth pieces separated by along-track gaps larger than this (m) "
+                             "independently (default: 10000; 0 = whole series, notebook behaviour)")
     parser.add_argument("--water-threshold", type=float, default=None,
-                        help="Mask new_h_ref above this height (m) before smoothing (optional)")
+                        help="Mask new_h_ref above this height (m) before smoothing, as Notebook 6 "
+                             "does with 0.2 m + mean(ATL03 - ATL07) (optional)")
+    parser.add_argument("--lead-fallback", choices=["thin_ice", "none"], default="thin_ice",
+                        help="Windows without predicted open water: use thin ice as leads "
+                             "(notebook, default) or leave them to interpolation (paper)")
     parser.add_argument("--track", type=str, default=None,
                         help="Keep only rows whose track id equals this value (per-track fan-out)")
     parser.add_argument("--elev-threshold", type=float, default=10.0,
@@ -221,13 +278,15 @@ def main():
     compute_simple_sea_surface(data, args.radius)
 
     if args.method == "nasa_sea_surface_eqn":
-        logger.info("Computing NASA sea surface equation (radius=%.0f m, weights=%s)...",
-                    args.radius, args.weight_form)
-        compute_nasa_sea_surface(data, args.radius, weight_form=args.weight_form)
+        logger.info("Computing NASA sea surface equation (radius=%.0f m, weights=%s, fallback=%s)...",
+                    args.radius, args.weight_form, args.lead_fallback)
+        compute_nasa_sea_surface(data, args.radius, weight_form=args.weight_form,
+                                 lead_fallback=args.lead_fallback)
         n_nan = int(data["new_h_ref"].isna().sum())
         if n_nan:
             logger.warning("new_h_ref is NaN for %d rows (no leads in track)", n_nan)
-        compute_smoothed_sea_surface(data, args.smooth_window, args.water_threshold)
+        compute_smoothed_sea_surface(data, args.smooth_window, args.water_threshold,
+                                     max_gap=args.smooth_max_gap or None)
 
     data.to_csv(args.output, index=False)
     logger.info("Saved freeboard CSV to %s (%d rows)", args.output, len(data))

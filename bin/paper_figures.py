@@ -161,13 +161,18 @@ PAPER_METRICS = {
     "LSTM": {"Accuracy": 96.56, "Precision": 97.00, "Recall": 96.09, "F1": 96.54},
     "MLP": {"Accuracy": 91.80, "Precision": 91.80, "Recall": 91.80, "F1": 91.79},
 }
+# Per-class accuracy as quoted in the paper's text (Section IV.C.1). The figure itself
+# prints 60.35 for open water; the text says 60.25. The text value is used here.
 PAPER_PER_CLASS = {"thick ice": 98.39, "thin ice": 73.80, "open water": 60.25}
 
-# Hardcoded confusion matrix from paper (row-normalized percentages)
+# Confusion matrix transcribed from the paper's Fig. 4 (row-normalised percentages,
+# rows = actual thick ice / thin ice / water, columns = predicted in the same order).
+# The figure's open-water diagonal reads 60.35 (the text says 60.25); the figure value is
+# kept here so the rows sum to 100.
 CM_PAPER = np.array([
-    [98.39, 1.44, 0.17],
-    [20.30, 73.80, 5.90],
-    [18.75, 21.00, 60.25],
+    [98.39, 1.35, 0.26],
+    [19.25, 73.80, 6.95],
+    [5.17, 34.48, 60.35],
 ])
 
 # ---------------------------------------------------------------------------
@@ -539,13 +544,19 @@ def fig_7_classification(output_dir, predictions_csv=None, atl07_csv=None):
 # Figures 8 & 9: Sea surface comparison
 # ---------------------------------------------------------------------------
 
-def _fig_sea_surface(output_dir, fig_num, track_key, freeboard_csv=None):
-    """Two subplots: (a) 4 sea surface methods, (b) ATL03 vs ATL07 sea surface."""
+def _fig_sea_surface(output_dir, fig_num, track_key, freeboard_csv=None, atl07_csv=None):
+    """Two subplots: (a) 4 sea surface methods, (b) ATL03 vs ATL07 sea surface.
+
+    Panel (b) draws the ATL07 ``h_ref`` from the reference CSV (Koo format) when one is
+    given. The notebook instead merged ``h_ref`` onto the ATL03 rows first; the workflow
+    never produces that merged column, so the reference frame is plotted directly.
+    """
     tp = TRACK_PARAMS[track_key]
     logger.info("Generating Figure %d: Sea Surface — %s", fig_num, tp["track_id"])
 
     fb_df = _load_csv(freeboard_csv)
     track_data = _filter_track(fb_df, tp)
+    atl07_data = _filter_atl07_track(_load_csv(atl07_csv), tp)
 
     if track_data is None:
         logger.warning("  No data available for Figure %d — skipping", fig_num)
@@ -578,8 +589,15 @@ def _fig_sea_surface(output_dir, fig_num, track_key, freeboard_csv=None):
     ss_col = "new_h_ref_smooth" if "new_h_ref_smooth" in track_data.columns else "new_h_ref"
     if ss_col in track_data.columns:
         ax.scatter(track_data[x_col], track_data[ss_col], s=2, label="ATL03 Sea Surface")
-    if "h_ref" in track_data.columns:
+    if "h_ref" in track_data.columns:  # notebook-style merged column, if present
         ax.scatter(track_data[x_col], track_data["h_ref"], s=2, label="ATL07 Sea Surface")
+    elif atl07_data is not None and "h_ref" in atl07_data.columns:
+        atl07_x = "x" if x_col == "x_atc" and "x" in atl07_data.columns else (
+            "lon" if "lon" in atl07_data.columns else None)
+        if atl07_x is not None:
+            ax.scatter(atl07_data[atl07_x], atl07_data["h_ref"], s=2, label="ATL07 Sea Surface")
+        else:
+            logger.warning("  ATL07 CSV has no x/lon column for Figure %d(b)", fig_num)
     ax.set_xlabel("Along-Track Distance (m)" if x_col == "x_atc" else "Longitude (deg)")
     ax.set_ylabel("Sea Surface Elevation (m)")
     ax.set_ylim(-0.4, 0.4)
@@ -592,12 +610,12 @@ def _fig_sea_surface(output_dir, fig_num, track_key, freeboard_csv=None):
     return _savefig(fig, output_dir, f"fig_{fig_num:02d}_sea_surface_{track_key}")
 
 
-def fig_8_sea_surface(output_dir, freeboard_csv=None):
-    return _fig_sea_surface(output_dir, 8, "track1", freeboard_csv)
+def fig_8_sea_surface(output_dir, freeboard_csv=None, atl07_csv=None):
+    return _fig_sea_surface(output_dir, 8, "track1", freeboard_csv, atl07_csv)
 
 
-def fig_9_sea_surface(output_dir, freeboard_csv=None):
-    return _fig_sea_surface(output_dir, 9, "track2", freeboard_csv)
+def fig_9_sea_surface(output_dir, freeboard_csv=None, atl07_csv=None):
+    return _fig_sea_surface(output_dir, 9, "track2", freeboard_csv, atl07_csv)
 
 
 # ---------------------------------------------------------------------------
@@ -954,9 +972,9 @@ Examples:
     parser.add_argument("--metrics", default=None,
                         help="training_metrics.json from train_lstm.py (for Figs 12, 13)")
     parser.add_argument("--freeboard", nargs="+", default=None,
-                        help="Freeboard output CSV(s) (for Figs 8-11)")
+                        help="Freeboard output CSV(s) (for Figs 8-11, 14)")
     parser.add_argument("--atl07-csv", nargs="+", default=None,
-                        help="ATL07 comparison CSV(s) (for Figs 6, 7, 10, 11)")
+                        help="ATL07 comparison CSV(s) (for Figs 6-11)")
     parser.add_argument("--atl10-csv", nargs="+", default=None,
                         help="ATL10 comparison CSV(s); merged into ATL07 as freeboard_10 column")
     parser.add_argument("--output-dir", "-o", default="figures",
@@ -1048,8 +1066,8 @@ Examples:
             5: lambda: fig_5_horovod_training(args.output_dir),
             6: lambda: fig_6_classification(args.output_dir, args.predictions, atl07_path),
             7: lambda: fig_7_classification(args.output_dir, args.predictions, atl07_path),
-            8: lambda: fig_8_sea_surface(args.output_dir, freeboard_merged),
-            9: lambda: fig_9_sea_surface(args.output_dir, freeboard_merged),
+            8: lambda: fig_8_sea_surface(args.output_dir, freeboard_merged, atl07_path),
+            9: lambda: fig_9_sea_surface(args.output_dir, freeboard_merged, atl07_path),
             10: lambda: fig_10_freeboard(args.output_dir, freeboard_merged, atl07_path),
             11: lambda: fig_11_freeboard(args.output_dir, freeboard_merged, atl07_path),
             12: lambda: fig_12_training_curves(args.output_dir, args.metrics),
@@ -1069,8 +1087,8 @@ Examples:
         all_outputs.extend(fig_5_horovod_training(args.output_dir))
         all_outputs.extend(fig_6_classification(args.output_dir, args.predictions, atl07_path))
         all_outputs.extend(fig_7_classification(args.output_dir, args.predictions, atl07_path))
-        all_outputs.extend(fig_8_sea_surface(args.output_dir, freeboard_merged))
-        all_outputs.extend(fig_9_sea_surface(args.output_dir, freeboard_merged))
+        all_outputs.extend(fig_8_sea_surface(args.output_dir, freeboard_merged, atl07_path))
+        all_outputs.extend(fig_9_sea_surface(args.output_dir, freeboard_merged, atl07_path))
         all_outputs.extend(fig_10_freeboard(args.output_dir, freeboard_merged, atl07_path))
         all_outputs.extend(fig_11_freeboard(args.output_dir, freeboard_merged, atl07_path))
         all_outputs.extend(fig_12_training_curves(args.output_dir, args.metrics))

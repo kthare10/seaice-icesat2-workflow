@@ -23,7 +23,8 @@ gt1r and gt2r. 139,335 labelled 2 m segments become 134,249 five-timestep window
 ## 1. Classification accuracy
 
 Held-out 20 % test split, 26,850 windows. The paper does not state whether its Table III figures are
-on a held-out split; the notebook computes them on the whole prepared set.
+on a held-out split; the author's notebook evaluates on its own held-out 20 % split and reports
+95.47 % there (Notebook 3, cell 38), so the paper's 96.56 % most likely is too.
 
 | Metric | Paper LSTM | Paper MLP | **This run** | Delta vs paper LSTM |
 |---|---|---|---|---|
@@ -61,10 +62,28 @@ Confusion matrix, this run (rows are truth, counts):
 Residual confusion is almost entirely thick↔thin at ice-type transitions, which is where the author
 also had to hand-correct the Sentinel-2 labels.
 
-**Caveats on this comparison.** Training is stochastic and no seed is fixed for weight
-initialisation or dropout: run0002 and run0005 differ by 0.03 points overall but by 4 points on thin
-ice and 8 on open water. Single-run per-class figures should be read as approximate. The paper's
-training set is also larger than the six tracks shared with us.
+**Caveats on this comparison.**
+
+- Training is stochastic and no seed is fixed for weight initialisation or dropout: run0002 and
+  run0005 differ by 0.03 points overall but by 4 points on thin ice and 8 on open water. Single-run
+  per-class figures should be read as approximate.
+- The paper's dataset is not the same as ours, but not obviously larger. The notebook's prepared
+  set has 122,936 windows, consistent with four of the six shared files; ours has 134,249 from all
+  six. The paper trains on 80 % (about 98,000 to 103,000 windows) where this run trains on 60 %
+  (80,549), so the paper's model saw roughly a quarter more training windows drawn from a slightly
+  smaller pool.
+- Features are not certain to match. The paper says 6 per timestep; the notebook builds 8 and the
+  workflow uses those 8, but the notebook's final model cell declares an input shape of `(5, 6)`.
+  Which six the paper used cannot be recovered from the text.
+- Both the paper's model and ours use `rel_height_min_elev`, a feature computed from the
+  **ground-truth** open-water labels of the surrounding 10 km window (Notebook 2). The comparison
+  is like for like, but neither accuracy is a fair estimate for unlabelled tracks, where the
+  feature does not exist. See the Reference section of the README.
+- The notebook's `(x - mean) / (1 - std)` normalisation, reproduced here, scales `bcnt_mean` and
+  `brate_mean` to effectively zero, so the model in practice sees six informative features.
+- Precision, recall and F1 above are the notebook's custom Keras metrics (batch-averaged, on
+  rounded softmax outputs), which is what Table III reports. scikit-learn's weighted F1 on the same
+  predictions is 96.17 and its macro F1 is 80.50.
 
 ### What MLP and LSTM are, and why the LSTM wins
 
@@ -106,13 +125,33 @@ above is quoted from the paper rather than measured.
 
 | Track | Segments | Along-track span | Mean | Median | p10 | p90 |
 |---|---|---|---|---|---|---|
-| 20191104195311_05940510_gt1r | 49,451 | 225.5 km | 0.529 m | 0.445 m | 0.097 m | 1.103 m |
+| 20191104195311_05940510_gt1r | 49,451 | 110.3 km + 23.3 km, 92 km apart | 0.521 m | 0.438 m | 0.091 m | 1.101 m |
 | 20191104195311_05940510_gt2r | 40,429 | 109.7 km | 0.503 m | 0.379 m | 0.062 m | 1.082 m |
 | 20191126182014_09290510_gt1r | 24,365 | 55.8 km | 0.927 m | 0.995 m | 0.102 m | 1.504 m |
 | 20191126182014_09290510_gt2r | 20,004 | 51.5 km | 0.897 m | 0.961 m | 0.155 m | 1.471 m |
 
 Values are `freeboard_new_h_ref_smooth` over segments classified as ice, i.e. NASA's weighted-lead
-sea surface followed by the Notebook 6 smoothing.
+sea surface followed by the Notebook 6 smoothing, recomputed from the run0005 predictions with the
+current `compute_freeboard.py` defaults. The freeboard stage is deterministic given the
+predictions, so only the smoothing change below moves any number.
+
+**Two things to know before reading the table against the paper.**
+
+- *The Nov 4 gt1r track is two Sentinel-2 tiles 92 km apart* (T02CNA and T02CNC), merged because
+  they share a granule and beam. Notebook 6's smoothing window is 10,000 rows either side, which is
+  longer than the smaller tile, so in run0005 that tile's sea surface was partly set by values from
+  the other tile. `compute_freeboard.py` now smooths pieces separated by more than 10 km
+  independently (`--smooth-max-gap`); that moves this track's mean from 0.529 m to 0.521 m and its
+  median from 0.445 m to 0.438 m, and leaves the other three tracks unchanged.
+- *Windows without predicted open water borrow thin ice as leads.* The notebook (and, by default,
+  this workflow) applies NASA's lead equation to thin-ice segments when a 10 km window has no
+  predicted water. The paper instead says such windows are interpolated from their neighbours. On
+  these four tracks 15 of 70 windows take the fallback. `--lead-fallback none` gives the paper's
+  behaviour; it lowers the Nov 4 gt1r mean to 0.470 m and leaves the other tracks within 0.001 m,
+  because their few fallback windows sit where interpolation gives a similar value anyway.
+- *The Notebook 6 water-threshold mask is not applied.* For the figures that compare against ATL07,
+  the notebook masks the raw sea surface above 0.2 m plus the mean ATL03-minus-ATL07 offset before
+  smoothing. That offset needs ATL07 data, so the mask is off here (`--water-threshold`).
 
 **Agreement with the paper's description.** The paper does not tabulate freeboard values, so only
 its qualitative claims can be checked:
@@ -122,8 +161,9 @@ its qualitative claims can be checked:
   paper's Fig. 10c and 11c.
 - *Nov 26 higher than Nov 4* — reproduced: median 0.96–1.00 m on 26 November against 0.38–0.45 m on
   4 November, consistent with the paper's figures for the same two tracks.
-- *Freeboard above zero* — 99 % of ice segments are positive; the small negative tail comes from the
-  smoothed sea surface sitting slightly above individual thin-ice returns.
+- *Freeboard above zero* — 97.4 % of ice segments are positive overall, between 95.0 % (Nov 4 gt2r)
+  and 99.1 % (Nov 26 gt2r) per track; the negative tail comes from the smoothed sea surface sitting
+  slightly above individual thin-ice returns.
 
 **Sea surface methods** (paper §III.D.1 tests four; mean and standard deviation over all four tracks):
 
@@ -133,13 +173,18 @@ its qualitative claims can be checked:
 | Average elevation | 0.469 | 0.080 |
 | Nearest minimum elevation | 0.402 | 0.112 |
 | NASA equation, raw | 0.532 | 0.305 |
-| **NASA equation, smoothed** | **0.361** | **0.108** |
+| **NASA equation, smoothed** | **0.364** | **0.103** |
+| NASA equation, raw, `--lead-fallback none` | 0.458 | 0.095 |
 
 The paper selects the NASA formula because it gives "a smoother local sea surface". Our raw NASA
 surface is in fact the *roughest* of the four (std 0.305 m); it only becomes the smoothest after the
 Notebook 6 post-processing, which the paper's text does not mention but its figures clearly use.
-That is worth flagging: the smoothing is not optional, it is what makes the method behave as the
-paper describes.
+Most of that roughness is the thin-ice fallback: windows with no predicted water get a sea surface
+from thin-ice heights, which sit 0.2 to 0.5 m above water, and the `nanmin` smoothing is what
+removes those excursions. With the paper's interpolation rule instead (last row) the raw surface's
+spread drops from 0.305 m to 0.095 m, second only to the average-elevation method, before any
+smoothing. So the smoothing is not optional in the notebook's pipeline, and the reason is the
+fallback.
 
 ---
 
@@ -148,12 +193,14 @@ paper describes.
 | | Segment length | Segments per km |
 |---|---|---|
 | ATL07 / ATL10 (paper §I) | 10–200 m strong beam | 5–100 |
-| **This run** (2 m sampling) | 2 m | **219–437 measured** |
+| **This run** (2 m sampling) | 2 m | **346–486 measured** |
 
 Measured density is below the theoretical 500/km because gaps remain where photons were filtered
-out. The paper's central claim — that 2 m resampling of ATL03 yields a denser product than ATL07 and
-ATL10 — holds by construction and is confirmed by these counts, but the *ratio* against ATL07 on the
-same tracks cannot be measured without the ATL07 granules.
+out (99.1 to 99.6 % of consecutive segments are exactly 2 m apart, the rest are short gaps). The
+Nov 4 gt1r track is counted per tile (346 and 486 per km over 110 km and 23 km), because its two
+tiles are 92 km apart and a single "span" for it would be meaningless. The paper's central claim — that 2 m resampling of ATL03 yields
+a denser product than ATL07 and ATL10 — holds by construction and is confirmed by these counts, but
+the *ratio* against ATL07 on the same tracks cannot be measured without the ATL07 granules.
 
 ---
 
@@ -202,10 +249,25 @@ training costs no accuracy - reproduces. The 1.04x against their 1.96x does not.
 
 The cause is visible in panel (b) rather than in the Horovod wiring. Each rank halves its step count
 (1,259 per epoch instead of 2,517), so a GPU-bound step would nearly halve the epoch. Instead the
-epoch barely moves, and even the single-GPU epoch is 2.7x slower than the paper's. Both point the
-same way: the step is dominated by Python-side batch preparation from in-memory NumPy arrays, not by
-GPU compute, so the model is starved and an added all-reduce per step cancels what sharding saves.
-The model is tiny - 12,051 parameters - which makes this the expected regime.
+epoch barely moves. That points to a step dominated by Python-side batch preparation from in-memory
+NumPy arrays rather than GPU compute, so the model is starved and an added all-reduce per step
+cancels what sharding saves. The model is tiny - 12,051 parameters - which makes this the expected
+regime.
+
+Two caveats on the numbers in the table:
+
+- **The paper's Table IV is internally inconsistent.** Its 1-GPU row gives 280.72 s total and
+  5.5 s per epoch for a stated 20 epochs, but 280.72 / 20 is 14.0 s, and 280.72 / 5.5 is about 51
+  epochs. If the total is right, the paper's single-GPU epoch is 14.0 s and ours (14.8 s) matches
+  it almost exactly; if the per-epoch column is right, ours is 2.7x slower. The per-epoch column is
+  plotted above because that is the paper's stated quantity. The "Data/s" column has the same
+  ambiguity (585.88 × 5.5 s is about 3,200 items per epoch, which fits the training set only if an
+  item is a 32-sample batch).
+- **The 1-GPU baseline is run0005, which did not use Horovod**, and neither `training_metrics.json`
+  records which worker ran the job. The pool has a 2 × Tesla T4 worker and a 2 × Quadro RTX 6000
+  worker, so the two runs may have used different GPU models. The starvation explanation is
+  consistent with everything measured, but a same-worker 1-rank Horovod run would be needed to
+  rule out a hardware difference.
 
 The paper names the same effect in its own results: *"the bottleneck arises from data preprocessing
 and subsequent batch preparation, resulting in GPU starvation. As a result, we are not achieving
@@ -256,7 +318,16 @@ See the Horovod section of the README for how to run it and the one-worker ceili
 | Fig. 13 | This run vs the paper | **Measured** (not in the paper) |
 | Fig. 14 | Freeboard across all 4 tracks | **Measured** (not in the paper) |
 | Fig. 15 | Elevation by predicted class, class balance | **Measured** (not in the paper) |
-| Fig. 16 | Horovod scaling against the paper's Table IV | **Measured** (not in the paper) |
+| Fig. 16 | Horovod scaling against the paper's Table IV | **Measured** (not in the paper), by `bin/comparison_figures.py` |
+
+Two corrections to how these were produced. The run0005 and run0009 figure bundles contain
+Figures 4 to 11 and the tables only: the generator did not pass `training_metrics.json` to the
+figures job, so Figures 12 and 13 were skipped in-workflow, and Figures 14 and 15 were added to
+`paper_figures.py` after those runs. Figures 12 to 15 shown here were rendered locally from the
+run0005 outputs with the same script; the generator now stages the metrics file, and a local
+`--all` run on the run0005 outputs produces all twelve figures. Separately, Figures 8b and 9b looked
+for an ATL07 column that the workflow never writes, so supplying ATL07 data would not have filled
+them; they now plot the reference CSV directly.
 
 Per-track validation reports (`report_<track>.tar.gz`) add a classification plot and a sea-surface
 plot for each of the four tracks.
@@ -275,7 +346,9 @@ Paper panels are extracted from `2502.02700v1.pdf`; ours are rendered from run00
 | ![paper confusion matrix](figures/paper/fig04_confusion_matrix.png) | ![this run confusion matrix](figures/run/fig04_confusion_matrix.png) |
 
 Same structure, same dominant diagonal. The differences are in the minority rows: the paper loses
-34.5 % of open water to thin ice, where this run loses 12.7 %.
+34.5 % of open water to thin ice and 5.2 % to thick ice, where this run loses 19.8 % and 3.7 %. (The
+paper's figure prints 60.35 % for the open-water diagonal while its text says 60.25 %; the text
+value is used in section 1.)
 
 ### Sea ice classification, track 20191104195311_05940510_gt2r (paper Fig. 6a)
 
