@@ -249,10 +249,18 @@ def _filter_track(df, track_params):
 
 
 def _filter_atl07_track(df, track_params):
-    """Filter ATL07 DataFrame to a specific track."""
+    """Filter ATL07 DataFrame to a specific track (beam, day, lon range).
+
+    The figures job receives every ATL07 CSV with all six beams, so without the beam
+    and day filters other beams crossing the same longitudes are drawn as this track.
+    """
     if df is None or len(df) == 0:
         return None
     d = df.copy()
+    if "beam" in d.columns:
+        d = d[d["beam"].astype(str).str.lower() == track_params["beam"]]
+    if "day" in d.columns:
+        d = d[d["day"] == track_params["day"]]
     if "lon" in d.columns:
         d = d[(d.lon >= track_params["lon1"]) & (d.lon <= track_params["lon2"])]
     if len(d) == 0:

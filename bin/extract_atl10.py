@@ -5,7 +5,8 @@ Extract ICESat-2 ATL10 freeboard data from raw HDF5 granules into CSV files.
 
 Reads raw ATL10 HDF5 files downloaded from NASA Earthdata, extracts freeboard
 and height segment data from all six beams, and parses timestamps from
-delta_time + ATLAS epoch.
+delta_time + ATLAS epoch. NASA fill values (3.4028235e38) become NaN, and ``h_ref`` is
+the reference sea surface the freeboard is measured from (``height - freeboard``).
 
 Handles path differences across ATL10 versions: tries /{beam}/freeboard_segment/
 first, then falls back to /{beam}/freeboard_beam_segment/ (older versions).
@@ -72,27 +73,33 @@ ATL10_PATHS = {
         "seg_dist_x",
     ],
     "height": [
+        "heights/height_segment_height",
         "height_segments/height_segment_height",
     ],
     "label": [
+        "heights/height_segment_type",
         "height_segments/height_segment_type",
     ],
     "seg_id": [
+        "height_segment_id",
         "height_segments/height_segment_id",
     ],
     "error": [
+        "heights/height_segment_w_gaussian",
         "height_segments/height_segment_w_gaussian",
     ],
     "ssh_flag": [
+        "heights/height_segment_ssh_flag",
         "height_segments/height_segment_ssh_flag",
     ],
     "h_norm": [
+        "heights/height_segment_htcorr_skew",
         "height_segments/height_segment_htcorr_skew",
     ],
-    "h_ref": [
-        "geophysical/height_segment_lpe",
-    ],
 }
+
+# NASA ICESat-2 float fill value (3.4028235e38); anything this large is missing data.
+FILL_THRESHOLD = 1e38
 
 
 def _find_fb_root(h5, beam):
@@ -115,8 +122,19 @@ def _try_read(h5, fb_root, sub_paths):
     for sub_path in sub_paths:
         full_path = f"{fb_root}/{sub_path}"
         if full_path in h5:
-            return h5[full_path][:]
+            return _mask_fill(h5[full_path][:])
     return None
+
+
+def _mask_fill(arr):
+    """Return float arrays with NASA fill values replaced by NaN; others unchanged."""
+    import numpy as np
+
+    if arr.dtype.kind != "f":
+        return arr
+    arr = arr.astype(np.float64)
+    arr[np.abs(arr) > FILL_THRESHOLD] = np.nan
+    return arr
 
 
 def extract_granule(h5_path, output_dir, beams=None):
@@ -177,7 +195,10 @@ def extract_granule(h5_path, output_dir, beams=None):
             error = _try_read(h5, fb_root, ATL10_PATHS["error"])
             ssh_flag = _try_read(h5, fb_root, ATL10_PATHS["ssh_flag"])
             h_norm = _try_read(h5, fb_root, ATL10_PATHS["h_norm"])
-            h_ref = _try_read(h5, fb_root, ATL10_PATHS["h_ref"])
+            # Reference sea surface under each freeboard segment: beam_fb_height is
+            # "relative to beam_refsurf_height", so height - freeboard recovers it.
+            h_ref = height - freeboard if height is not None else None
+            logger.info("  %s: %d fill freeboards masked", beam, int(np.isnan(freeboard).sum()))
 
             # Parse timestamps from delta_time
             if delta_time is not None and len(delta_time) > 0:

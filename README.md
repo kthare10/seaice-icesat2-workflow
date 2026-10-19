@@ -452,11 +452,11 @@ python bin/extract_atl10.py --input-dir ./data/atl10/ --output-dir ./data/atl10_
 
 **Output**: One CSV per granule (all 6 beams combined, distinguished by `beam` column).
 
-**ATL07 output columns**: `beam, lat, lon, x, seg_id, height, h_ref, label, error, quality, confidence, ssh_flag, mss, dac, geoid, tide, freeboard, day, hour, minute, second`
+**ATL07 output columns**: `beam, lat, lon, x, seg_id, height, h_ref, label, error, quality, confidence, ssh_flag, mss, dac, geoid, tide, freeboard, freeboard_10, day, hour, minute, second`
 
 **ATL10 output columns**: `beam, lat, lon, x, seg_id, height, label, h_ref, freeboard, fb_confidence, fb_quality, h_norm, error, ssh_flag, day, hour, minute, second`
 
-ATL07 extraction computes `freeboard = max(0, height - h_ref)`. Both scripts parse timestamps from `delta_time` + ATLAS epoch (2018-01-01). Path variants across HDF5 versions (v2–v7) are handled automatically.
+ATL07 has no per-segment sea surface, so `extract_atl07.py --atl10 <ATL10 granules>` takes it from the ATL10 granule with the same granule id: `h_ref` is ATL10's reference surface (`height_segment_height - beam_fb_height`) joined on `height_segment_id` and interpolated along track onto the remaining ATL07 segments, `freeboard = height - h_ref` (not clipped), and `freeboard_10` is ATL10's `beam_fb_height`. Without `--atl10` those columns are NaN. In ATL10 output, `h_ref = height - freeboard`. NASA fill values (3.4028235e38) become NaN in both. Both scripts parse timestamps from `delta_time` + ATLAS epoch (2018-01-01). Path variants across HDF5 versions (v2–v7) are handled automatically.
 
 <details>
 <summary>All ATL07/ATL10 extraction options</summary>
@@ -572,7 +572,7 @@ python workflow_generator.py --input-dir ./data/labeled/ \
 | `--radius` | 5000 | Sliding window radius in metres |
 | `--weight-form` | `paper` | Lead weight in the NASA sea-surface equation. `paper`: exp(-((h-hmin)/sigma)^2), Eq. 2. `notebook`: the author's exp(-(h-hmin)/sigma)^2 |
 | `--smooth-window` | 10000 | Rows either side for the nanmin smoothing of `new_h_ref` (Notebook 6); 0 disables |
-| `--smooth-max-gap` | 10000 | Pieces of a track separated by an along-track jump larger than this (m) are smoothed independently, so tiles tens of km apart do not share a sea surface. 0 smooths the whole track as one, as the notebook does |
+| `--smooth-max-gap` | 0 | 0 smooths the whole track as one, as the notebook does. A positive value (e.g. 10000) smooths pieces separated by a larger along-track jump (m) independently, so tiles tens of km apart do not share a sea surface |
 | `--water-threshold` | off | Mask the NASA sea surface above this height (m) before smoothing. Notebook 6 does this with 0.2 m + mean(ATL03 − ATL07), which needs ATL07 data, so it is off by default |
 | `--lead-fallback` | `thin_ice` | Sea-surface windows with no predicted open water: `thin_ice` uses thin-ice segments as leads (the notebook); `none` leaves them to interpolation from neighbouring windows (what the paper describes) |
 | `--zscore` | off | Enable the z-score stage that the author's final pipeline leaves disabled |
@@ -582,7 +582,8 @@ python workflow_generator.py --input-dir ./data/labeled/ \
 | `--skip-autolabel` / `--force-autolabel` | auto | Correction is skipped automatically when every input is `*_done.csv` |
 | `--max-tracks` | — | Use only the first N input files |
 | `--atl07-dir` / `--atl10-dir` | — | Reference CSVs (`ATL07*.csv`, `ATL10*.csv`) for validation and figures |
-| `--raw-atl07-dir` / `--raw-atl10-dir` | — | Raw HDF5 directories; extraction runs as workflow jobs |
+| `--raw-atl07-dir` / `--raw-atl10-dir` | — | Raw HDF5 directories; extraction runs as workflow jobs, and each ATL07 job also receives its same-granule ATL10 file for the sea surface |
+| `--reuse FILE...` | — | Register outputs of an earlier run for Pegasus data reuse; jobs whose outputs are all listed are pruned (e.g. a run's `freeboard_*.csv`, predictions, model and metrics to redo only extraction, validation and figures) |
 | `-e, --execution-site` | `condorpool` | Execution site name |
 | `-o, --output` | `workflow.yml` | Output file |
 
@@ -730,8 +731,9 @@ Details that matter when reading the result against the paper:
   none` does that. On the author's four tracks 15 of 70 windows take the fallback, and it is the
   main reason the raw NASA surface is rougher than the three simpler ones before smoothing.
 - **The smoothing window is 10,000 rows either side**, about 20 km at 2 m spacing, and is defined
-  in rows, not metres. `--smooth-max-gap` (default 10 km) splits a track at larger along-track
-  jumps so that a track assembled from distant Sentinel-2 tiles is smoothed piecewise.
+  in rows, not metres. `--smooth-max-gap` (default 0, notebook parity; e.g. 10000 m) splits a track at
+  larger along-track jumps so that a track assembled from distant Sentinel-2 tiles is smoothed
+  piecewise.
 - **Notebook 6 masks the surface before smoothing** at 0.2 m above the mean ATL03−ATL07 height
   difference for the figures that compare against ATL07. That needs ATL07 data, so it is off by
   default (`--water-threshold`).

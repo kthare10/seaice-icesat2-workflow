@@ -134,9 +134,11 @@ def search_icesat2(product, bbox, start_date, end_date, rgt_filter=None):
     )
 
     if rgt_filter:
-        # ATL filenames encode RGT as characters 22-25:
+        # ATL filenames encode RGT as the first four digits after the timestamp;
+        # sea-ice products add a hemisphere suffix (-01 north, -02 south):
         # ATL03_20191103184432_05780510_006_02.h5
-        #                      ^^^^
+        # ATL07-02_20191104185303_05940501_007_01.h5
+        #                         ^^^^
         rgt_set = set(rgt_filter)
         filtered = []
         for granule in results:
@@ -145,7 +147,7 @@ def search_icesat2(product, bbox, start_date, end_date, rgt_filter=None):
                 continue
             fname = Path(links[0]).name
             # Extract RGT from filename using regex
-            m = re.search(r"ATL\d{2}_\d{14}_(\d{4})", fname)
+            m = re.search(r"ATL\d{2}(?:-\d{2})?_\d{14}_(\d{4})", fname)
             if m and m.group(1) in rgt_set:
                 filtered.append(granule)
         logger.info(

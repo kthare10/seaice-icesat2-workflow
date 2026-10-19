@@ -25,7 +25,8 @@ the nearest window. ``--lead-fallback thin_ice`` (default, notebook parity) or `
 
 Smoothing: the Notebook 6 nanmin window is defined in rows, not metres. A track assembled from
 tiles that are far apart would smooth across the gap, so ``--smooth-max-gap`` splits the series
-at along-track jumps larger than that distance and smooths each piece independently.
+at along-track jumps larger than that distance and smooths each piece independently. Off by
+default (0), matching the author's methodology.
 """
 
 import argparse
@@ -234,9 +235,9 @@ def main():
                         help="Lead weight formula (default: paper Eq. 2)")
     parser.add_argument("--smooth-window", type=int, default=10000,
                         help="±rows for the nanmin smoothing of new_h_ref (Notebook 6: 10000; 0 disables)")
-    parser.add_argument("--smooth-max-gap", type=float, default=10000.0,
+    parser.add_argument("--smooth-max-gap", type=float, default=0.0,
                         help="Smooth pieces separated by along-track gaps larger than this (m) "
-                             "independently (default: 10000; 0 = whole series, notebook behaviour)")
+                             "independently (default: 0 = whole series, notebook behaviour)")
     parser.add_argument("--water-threshold", type=float, default=None,
                         help="Mask new_h_ref above this height (m) before smoothing, as Notebook 6 "
                              "does with 0.2 m + mean(ATL03 - ATL07) (optional)")

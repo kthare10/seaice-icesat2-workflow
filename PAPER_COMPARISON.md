@@ -143,9 +143,10 @@ predictions, so only the smoothing change below moves any number.
 - *The Nov 4 gt1r track is two Sentinel-2 tiles 92 km apart* (T02CNA and T02CNC), merged because
   they share a granule and beam. Notebook 6's smoothing window is 10,000 rows either side, which is
   longer than the smaller tile, so in run0005 that tile's sea surface was partly set by values from
-  the other tile. `compute_freeboard.py` now smooths pieces separated by more than 10 km
-  independently (`--smooth-max-gap`); that moves this track's mean from 0.529 m to 0.521 m and its
-  median from 0.445 m to 0.438 m, and leaves the other three tracks unchanged.
+  the other tile. `--smooth-max-gap 10000` smooths pieces separated by more than 10 km
+  independently; that moves this track's mean from 0.529 m to 0.521 m and its median from 0.445 m
+  to 0.438 m, and leaves the other three tracks unchanged. Since 2026-10-19 the default is 0 (whole
+  track, as the notebook does), to match the author's method; see `GAP_ANALYSIS.md` Section 13.
 - *Windows without predicted open water borrow thin ice as leads.* The notebook (and, by default,
   this workflow) applies NASA's lead equation to thin-ice segments when a 10 km window has no
   predicted water. The paper instead says such windows are interpolated from their neighbours. On
@@ -468,7 +469,8 @@ Two ways to supply them:
    ```
    NASA's `label` is `height_segment_type`, not a classifier output; `validate_freeboard.py` remaps
    it to water/ice, but thin ice cannot be recovered from those codes, so the comparison will be
-   coarser than the author's.
+   coarser than the author's. NSIDC now serves version 007 only (the author's files are 005).
+   This route was run on 2026-10-19 (run0011-run0013); results are in `GAP_ANALYSIS.md` Section 13.
 
 **A Multi-Layer Perceptron arm**, if Table III is to be reproduced rather than quoted. It would be
 a small addition — the same prepared feature vectors, flattened to 40 inputs, through a couple of

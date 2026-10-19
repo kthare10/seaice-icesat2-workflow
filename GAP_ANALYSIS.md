@@ -95,7 +95,8 @@ mention:
   prepared set (train+val+test). Paper Table III / Fig. 4 are on the 20 % test split.
 - **ATL07/ATL10 semantics.** `validate_freeboard.py` and `paper_figures.py` assume Koo-format CSVs
   (`label` 0=water/1=thin/2=thick from Koo's classifier, `h_ref`, `freeboard_10`, `h_ref_10`).
-  `extract_atl07.py` writes `label = height_segment_type` (NASA codes 0–9) and `h_ref = height_segment_lpe`;
+  `extract_atl07.py` writes `label = height_segment_type` (NASA codes 0–9) and `h_ref = height_segment_lpe`
+  (the `h_ref` part fixed 2026-10-19, Section 13);
   `>= 1` is then read as "ice" and `2` as "thick ice", which is not what those codes mean. Needs a
   remap (e.g. `ssh_flag`/`height_segment_type` → water vs ice) or a note that the comparison requires
   Koo's CSVs. Also `date_str = f"201911{day:02d}"` hard-codes year/month.
@@ -374,7 +375,7 @@ resolution) and notebooks 3, 5 and 6, recomputing every number in `PAPER_COMPARI
 | The generator never passed `--metrics` to `paper_figures`, so Figures 12 and 13 were skipped in every workflow run (the run0005 bundle holds Figures 4-11 only) | `training_metrics.json` is now an input of the figures job |
 | Figures 8b/9b looked for an `h_ref` column in the freeboard CSV, which the workflow never produces, so the ATL07 panel could not be populated even with ATL07 data | The ATL07 frame is passed to `_fig_sea_surface` and plotted directly |
 | `--preset paper` added Dropout(0.2) after each of the 7 dense layers; the paper has dropout in the LSTM layer only | `dense_dropout` per preset (notebook 0.4, paper 0), `--dense-dropout` override |
-| Notebook 6's smoothing window is 10,000 rows, and the Nov 4 gt1r track is two Sentinel-2 tiles 92 km apart, so the smaller tile's smoothed sea surface was partly set by the other tile | `--smooth-max-gap` (default 10 km) smooths pieces separated by larger gaps independently |
+| Notebook 6's smoothing window is 10,000 rows, and the Nov 4 gt1r track is two Sentinel-2 tiles 92 km apart, so the smaller tile's smoothed sea surface was partly set by the other tile | `--smooth-max-gap` (10 km here; default changed to 0, notebook parity, on 2026-10-19 — Section 13) smooths pieces separated by larger gaps independently |
 | The thin-ice fallback in the NASA sea-surface equation (NB5 cell 24) was undocumented and not switchable; the paper describes interpolation instead | `--lead-fallback {thin_ice,none}`, logged per track; default stays `thin_ice` for notebook parity |
 | Notebook 6's water-threshold mask was implemented but unreachable from the generator | `--water-threshold` passed through |
 
@@ -416,14 +417,16 @@ Accuracy and the minority-class figures again move by a few points against run00
 describes. The fallback count differs from the local recomputation on run0005 predictions (7) because
 the predictions differ.
 
-## 12. Open items (as of 2026-09-18)
+## 12. Open items (as of 2026-09-18; updated 2026-10-19, see Section 13)
 
 The single list of what is still unresolved, superseding the "not applied" and "still open" notes
 in the sections above.
 
 **Need data or the authors**
 
-1. **ATL07 and ATL10 for the two paper tracks.** Every empty panel (Figs 6b, 7b, 8b, 9b, 10b-d,
+1. **ATL07 and ATL10 for the two paper tracks.** *Partly resolved 2026-10-19:* the author does not
+   have the Koo-format CSVs, so NASA v007 granules were downloaded and the panels now populate
+   (Section 13). Still open: the three-class (thin-ice) comparison needs Koo's labels. Every empty panel (Figs 6b, 7b, 8b, 9b, 10b-d,
    11b-d) and the paper's sea-surface and density validation claims depend on them. Koo-format CSVs
    (`csv_Iqrah/ATL07-02_*.csv`) are preferable; NASA granules work through `--raw-atl07-dir` but
    lose the thin-ice class. Exact files and commands: `PAPER_COMPARISON.md`, "What is still
@@ -443,7 +446,9 @@ in the sections above.
 5. **Fixed seed, or repeats.** No seed is set for weight initialisation or dropout, and per-class
    accuracy moves 4-8 points between runs (run0002 / run0005 / run0010). Either seed the training
    or report a mean over several runs before quoting per-class figures.
-6. **Paper-faithful arms** if wanted alongside the notebook-parity defaults: `--lead-fallback none`
+6. **Paper-faithful arms** if wanted alongside the notebook-parity defaults. *Lead priority settled
+   2026-09-22:* the author confirmed water first, thin ice if there is no water, interpolation if
+   neither, which is the `--lead-fallback thin_ice` default. Remaining arms: `--lead-fallback none`
    (interpolate windows without water instead of using thin ice), `--preset paper` (LSTM 16 ELU, 7
    dense layers, dropout in the LSTM only), `--norm zscore`. Each changes the published numbers, so
    each is a deliberate switch, not a default.
@@ -466,3 +471,72 @@ in the sections above.
     `Apptainer/seaice_gpu.def` to match the README.
 11. `~/seaice-icesat2-workflow` on the submit host is an rsync copy, not a git checkout, so code
     changes have to be synced by hand. Cloning the repository there removes that step.
+
+## 13. ATL07/ATL10 validation and author-meeting follow-ups (2026-10-19)
+
+Actions from the 2026-09-22 meeting with the author: match her smoothing, and validate against
+ATL07/ATL10. She does not have the Koo-format `csv_Iqrah/` files, so the NASA granules for the two
+paper tracks were downloaded from NSIDC (`ATL07-02_20191104185303_05940501_007_01`,
+`ATL07-02_20191126172006_09290501_007_01` and the matching ATL10). NSIDC serves version 007 only;
+the author's files were 005.
+
+### Changes
+
+| Change | Detail |
+|---|---|
+| Smoothing default | `--smooth-max-gap` default 10000 -> 0: the whole track is smoothed as one, as Notebook 6 does. The gap-aware variant stays available with `--smooth-max-gap 10000` |
+| `download_data.py` RGT filter | Matched only ATL03 names, so the `-02` hemisphere suffix (`ATL07-02_...`) made it drop every ATL07/ATL10 granule |
+| `extract_atl07.py` sea surface | `h_ref` was `height_segment_lpe`, the **equilibrium tide** (~0.02 m), so "freeboard" was `max(0, height - tide)`. ATL07 has no per-segment sea surface; it now comes from the same-granule ATL10 (`height_segment_height - beam_fb_height`, joined on `height_segment_id`, interpolated along track), `freeboard = height - h_ref` without the clip, plus `freeboard_10` by exact id |
+| `extract_atl07.py` paths | `seg_id` silently fell back to row numbers and `x` was empty (both live directly under `sea_ice_segments/`), which is why Fig. 8b/9b drew no ATL07 line; tide renamed `height_segment_ocean` in v7 |
+| `extract_atl10.py` | `h_ref` was also the tide; now `height - freeboard`. Height, type, segment id, error and ssh-flag paths fixed for v7 (`freeboard_segment/heights/...`), which had come out empty |
+| Fill values | NASA's 3.4028235e38 was read as data (3-10 k ATL07 heights and ~6.8 k ATL10 freeboards per beam); the figures' `clip(0, 3.5)` turned them into a spike at 3.5 m. Now NaN in both scripts |
+| `paper_figures.py` ATL07 filter | Filtered by longitude only, so all six beams and both days were drawn as the paper track (doubled sea-surface line, density inflated). Now also by beam and day |
+| Generator | Each ATL07 extraction job receives its same-granule ATL10 file; new `--reuse FILE...` registers earlier outputs so Pegasus prunes the jobs that made them |
+
+Checks on the real granules: on segments both products report, ATL07 `height - h_ref` equals
+ATL10's freeboard for 99.6 %; the remaining 0.4 % are segments where ATL10 stores a different height
+than ATL07 for the same id (a property of the products). ATL10's `beam_fb_refsurf_interp` agrees
+with `height - beam_fb_height` to 1 mm on 96 % of segments.
+
+### Runs
+
+| Run | What | Result |
+|---|---|---|
+| run0011 | Full workflow, `--smooth-max-gap 0`, raw ATL07/ATL10 | 22 tasks / 43 jobs, 100 %, 21 min 23 s. Test accuracy 95.30 %, per-class recall 96.4 / 82.6 / 77.5 (thick / thin / water); within the unseeded spread. ATL07 panels populated but wrong (bugs above) |
+| run0012 | Fixed extraction, `--reuse` of run0011 model, predictions and freeboard | 9 compute tasks, 100 %. Exposed the beam/day filter bug in the figures |
+| run0013 | Fixed figure filter, reuse of run0012 reports | 5 compute tasks, 100 %. Figures 8-11 correct |
+
+### Findings (run0011 freeboard against ATL10 v007, ice segments matched within 50 m)
+
+| Track | Sea surface, ours - ATL10 | Freeboard mean, ours vs ATL10 | Points per km, ATL03 vs ATL10 |
+|---|---|---|---|
+| Nov 4 gt1r | +0.545 m (sd 0.022) | 0.416 vs 0.456 | 624 vs 133 |
+| Nov 4 gt2r | +0.523 m (sd 0.026) | 0.499 vs 0.503 | 444 vs 97 |
+| Nov 26 gt1r | +0.687 m (sd 0.021) | 0.901 vs 0.539 | 531 vs 92 |
+| Nov 26 gt2r | +0.675 m (sd 0.030) | 0.887 vs 0.609 | 420 vs 86 |
+
+1. **The 0.5-0.7 m sea-surface gap is mostly a vertical-reference offset**, not the paper's "little
+   over 0.1 m" disagreement: on Nov 4 the raw heights differ by the same amount (ATL03 `h_cor_mean`
+   minus ATL07 height, median 0.52-0.54 m), and the gap's along-track sd is only 2-3 cm, so the two
+   surfaces have the same shape. Notebook 6's mask at `0.2 + mean(ATL03 - ATL07)` already treats an
+   offset of this kind as known. Which reference and corrections `h_cor_mean` carries, and what the
+   paper subtracted before quoting 0.1 m, is a question for the author.
+2. **Freeboard agrees with ATL10 on Nov 4** to 0.4-4 cm in the mean (freeboard is relative, so the
+   offset cancels).
+3. **Nov 26 means are 0.28-0.36 m higher than ATL10** over the matched stretch, and the sea surface
+   sits ~15 cm lower relative to NASA's than on Nov 4. In the paper's Fig. 11 window both
+   distributions peak near 1.0 m; the mean difference comes from ATL10 having more near-zero
+   segments, consistent with thin ice / open water being classified as thicker ice on this track,
+   which the author raised in the meeting.
+4. **The density claim holds:** ATL03 gives 4.5-6.5x the points per km of ATL10.
+
+Caveats: v007 rather than 005, water/ice classes only, and a single unseeded training run.
+
+### Open items added
+
+12. **Vertical reference of `h_cor_mean`** (finding 1) — author.
+13. **Nov 26 low-freeboard segments** (finding 3): check against the author's classification fixes,
+    and re-run once training is seeded (item 5).
+14. **`--water-threshold`**: Notebook 6's mask needs `mean(ATL03 - ATL07)`, now measurable
+    (0.52-0.54 m on Nov 4); enabling it is a follow-up run once finding 1 is settled.
+

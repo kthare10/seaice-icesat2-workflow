@@ -214,9 +214,13 @@ class SeaIceClassificationWorkflow:
 
     def create_replica_catalog(self, input_files, atl07_files=None, atl10_files=None,
                                raw_atl07_files=None, raw_atl10_files=None,
-                               build_containers=True, prebuilt_dir=None):
+                               build_containers=True, prebuilt_dir=None, reuse_files=None):
         """Register data inputs, the stage scripts, and either the container
-        definitions (to build) or pre-built .sif images."""
+        definitions (to build) or pre-built .sif images.
+
+        ``reuse_files`` are outputs of an earlier run. Registering them lets
+        pegasus-plan's data reuse prune every job whose outputs are all already
+        present (and, transitively, the jobs feeding only those)."""
         self.rc = ReplicaCatalog()
 
         def add(path):
@@ -229,6 +233,11 @@ class SeaIceClassificationWorkflow:
             for filepath in filelist:
                 add(filepath)
         logger.info("Replica catalog: %d data files", len(input_files))
+        for filepath in reuse_files or []:
+            add(filepath)
+        if reuse_files:
+            logger.info("Replica catalog: %d reused outputs (%s)", len(reuse_files),
+                        ", ".join(sorted(os.path.basename(p) for p in reuse_files)))
 
         # Stage scripts travel with their jobs, so a code change needs no rebuild.
         for _name, (script, _kind, _mem, _gpus) in STAGES.items():
@@ -291,7 +300,7 @@ class SeaIceClassificationWorkflow:
 
     def create_workflow(self, input_files, epochs=None, batch_size=32, preset="notebook",
                         units=None, dropout=None, lr=None, radius=5000,
-                        weight_form="paper", smooth_window=10000, smooth_max_gap=10000,
+                        weight_form="paper", smooth_window=10000, smooth_max_gap=0,
                         water_threshold=None, lead_fallback="thin_ice", zscore=False,
                         horovod=False, n_gpus=1, skip_autolabel=False,
                         build_containers=True,
@@ -323,6 +332,10 @@ class SeaIceClassificationWorkflow:
         # --- Stage 1: extract ATL07/ATL10 from raw HDF5 (optional) --------------
         atl07_input_files = []
         atl10_input_files = []
+        # ATL07 has no per-segment sea surface; extract_atl07 takes it from the ATL10
+        # granule with the same granule id (timestamp, RGT, version).
+        raw_atl10_by_id = {os.path.splitext(os.path.basename(p))[0].split("_", 1)[-1]:
+                           os.path.basename(p) for p in raw_atl10_files or []}
         for product, raw_files, sink in (("atl07", raw_atl07_files, atl07_input_files),
                                          ("atl10", raw_atl10_files, atl10_input_files)):
             for h5_path in raw_files or []:
@@ -330,10 +343,18 @@ class SeaIceClassificationWorkflow:
                 stem = os.path.splitext(h5_lfn)[0]
                 h5_file = File(h5_lfn)
                 csv_file = File(stem + ".csv")
-                job = self.stage_job(
-                    f"extract_{product}", f"extract_{product}_{stem}",
-                    ["--input", h5_file, "--output-dir", "."])
+                args = ["--input", h5_file, "--output-dir", "."]
+                atl10_lfn = (raw_atl10_by_id.get(stem.split("_", 1)[-1])
+                             if product == "atl07" else None)
+                if atl10_lfn:
+                    args += ["--atl10", File(atl10_lfn)]
+                elif product == "atl07" and raw_atl10_files:
+                    logger.warning("No ATL10 granule matches %s: its h_ref/freeboard will be NaN",
+                                   h5_lfn)
+                job = self.stage_job(f"extract_{product}", f"extract_{product}_{stem}", args)
                 job.add_inputs(h5_file)
+                if atl10_lfn:
+                    job.add_inputs(File(atl10_lfn))
                 job.add_outputs(csv_file, stage_out=False, register_replica=False)
                 self.wf.add_jobs(job)
                 sink.append(csv_file)
@@ -525,10 +546,10 @@ Examples:
                         help="Lead weight formula for the NASA sea surface (default: paper)")
     parser.add_argument("--smooth-window", type=int, default=10000,
                         help="+/-rows for sea-surface smoothing (Notebook 6: 10000; 0 disables)")
-    parser.add_argument("--smooth-max-gap", type=int, default=10000,
+    parser.add_argument("--smooth-max-gap", type=int, default=0,
                         help="Smooth pieces of a track separated by along-track gaps larger than "
-                             "this (m) independently (default: 10000; 0 = whole track, as the "
-                             "notebook does)")
+                             "this (m) independently (default: 0 = whole track, as the notebook "
+                             "does; e.g. 10000 for gap-aware smoothing)")
     parser.add_argument("--water-threshold", type=float, default=None,
                         help="Mask the NASA sea surface above this height (m) before smoothing, as "
                              "Notebook 6 does with 0.2 m + mean(ATL03 - ATL07); off by default "
@@ -560,6 +581,11 @@ Examples:
                         help="Directory containing raw ATL07 HDF5 files (*.h5) to extract")
     parser.add_argument("--raw-atl10-dir", default=None,
                         help="Directory containing raw ATL10 HDF5 files (*.h5) to extract")
+    parser.add_argument("--reuse", nargs="+", default=None, metavar="FILE",
+                        help="Outputs of an earlier run to register for Pegasus data reuse; jobs "
+                             "whose outputs are all listed are pruned (e.g. pass a run's "
+                             "freeboard_*.csv, predictions, model and metrics to redo only the "
+                             "ATL07/ATL10 validation and figures)")
     args = parser.parse_args()
 
     input_files = sorted(glob.glob(os.path.join(args.input_dir, args.pattern)))
@@ -601,6 +627,9 @@ Examples:
     atl10_files = discover(args.atl10_dir, "ATL10*.csv", "ATL10*.csv")
     raw_atl07_files = discover(args.raw_atl07_dir, "*.h5", "ATL07 *.h5")
     raw_atl10_files = discover(args.raw_atl10_dir, "*.h5", "ATL10 *.h5")
+    reuse_files = sorted({p for pattern in args.reuse or [] for p in glob.glob(pattern)})
+    if args.reuse and not reuse_files:
+        logger.warning("--reuse matched no files: nothing will be reused")
 
     logger.info("=" * 70)
     logger.info("SEA ICE CLASSIFICATION & FREEBOARD WORKFLOW GENERATOR")
@@ -632,7 +661,8 @@ Examples:
         wf.create_replica_catalog(input_files, atl07_files=atl07_files, atl10_files=atl10_files,
                                   raw_atl07_files=raw_atl07_files, raw_atl10_files=raw_atl10_files,
                                   build_containers=build_containers,
-                                  prebuilt_dir=args.prebuilt_containers)
+                                  prebuilt_dir=args.prebuilt_containers,
+                                  reuse_files=reuse_files)
         wf.create_workflow(
             input_files=input_files, epochs=args.epochs, batch_size=args.batch_size,
             preset=args.preset, units=args.units, dropout=args.dropout, lr=args.lr,
