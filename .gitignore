@@ -29,3 +29,4 @@ __pycache__/
 .idea/
 .vscode/
 .DS_Store
+notebook_replay/replay_*.py

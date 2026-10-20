@@ -583,6 +583,8 @@ python workflow_generator.py --input-dir ./data/labeled/ \
 | `--max-tracks` | — | Use only the first N input files |
 | `--atl07-dir` / `--atl10-dir` | — | Reference CSVs (`ATL07*.csv`, `ATL10*.csv`) for validation and figures |
 | `--raw-atl07-dir` / `--raw-atl10-dir` | — | Raw HDF5 directories; extraction runs as workflow jobs, and each ATL07 job also receives its same-granule ATL10 file for the sea surface |
+| `--train-seed N` | unseeded | Seed weight initialisation, dropout and shuffling in `train_lstm` (`--seed` remains the split seed, 20) |
+| `--split` | `60/20/20` | Train/val/test split: notebook `60/20/20` or the paper's `80/20` (same 20 % test set; 80/20 trains without validation) |
 | `--reuse FILE...` | — | Register outputs of an earlier run for Pegasus data reuse; jobs whose outputs are all listed are pruned (e.g. a run's `freeboard_*.csv`, predictions, model and metrics to redo only extraction, validation and figures) |
 | `-e, --execution-site` | `condorpool` | Execution site name |
 | `-o, --output` | `workflow.yml` | Output file |

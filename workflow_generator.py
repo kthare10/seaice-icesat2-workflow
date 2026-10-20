@@ -306,7 +306,8 @@ class SeaIceClassificationWorkflow:
                         build_containers=True,
                         atl07_files=None, atl10_files=None,
                         raw_atl07_files=None, raw_atl10_files=None,
-                        paper_dates=("20191104", "20191126")):
+                        paper_dates=("20191104", "20191126"), train_seed=None,
+                        split="60/20/20"):
         """Create the workflow DAG."""
         logger.info("Creating workflow DAG")
         self.wf = Workflow(self.wf_name, infer_dependencies=True)
@@ -423,9 +424,10 @@ class SeaIceClassificationWorkflow:
             "--test-predictions-output", test_pred_file,
             "--preset", preset,
             "--batch-size", str(batch_size),
+            "--split", split,
         ]
         for flag, val in (("--epochs", epochs), ("--units", units),
-                          ("--dropout", dropout), ("--lr", lr)):
+                          ("--dropout", dropout), ("--lr", lr), ("--train-seed", train_seed)):
             if val is not None:
                 train_args += [flag, str(val)]
         if horovod:
@@ -581,6 +583,11 @@ Examples:
                         help="Directory containing raw ATL07 HDF5 files (*.h5) to extract")
     parser.add_argument("--raw-atl10-dir", default=None,
                         help="Directory containing raw ATL10 HDF5 files (*.h5) to extract")
+    parser.add_argument("--train-seed", type=int, default=None,
+                        help="Seed weight initialisation, dropout and shuffling in train_lstm "
+                             "(default: unseeded, as the notebook)")
+    parser.add_argument("--split", choices=["60/20/20", "80/20"], default="60/20/20",
+                        help="Train/val/test split: notebook 60/20/20 (default) or the paper's 80/20")
     parser.add_argument("--reuse", nargs="+", default=None, metavar="FILE",
                         help="Outputs of an earlier run to register for Pegasus data reuse; jobs "
                              "whose outputs are all listed are pruned (e.g. pass a run's "
@@ -642,6 +649,7 @@ Examples:
                 args.radius, args.weight_form, args.smooth_window, args.smooth_max_gap,
                 args.water_threshold, args.lead_fallback, args.zscore)
     logger.info("GPUs: %d, Horovod: %s", args.n_gpus, args.horovod)
+    logger.info("Split: %s, training seed: %s", args.split, args.train_seed)
     logger.info("Containers: %s", "built by the workflow" if build_containers
                 else f"pre-built from {args.prebuilt_containers}")
     logger.info("Skip autolabel: %s", skip_autolabel)
@@ -673,6 +681,7 @@ Examples:
             skip_autolabel=skip_autolabel, build_containers=build_containers,
             atl07_files=atl07_files, atl10_files=atl10_files,
             raw_atl07_files=raw_atl07_files, raw_atl10_files=raw_atl10_files,
+            train_seed=args.train_seed, split=args.split,
         )
         wf.write()
 

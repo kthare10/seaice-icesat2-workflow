@@ -184,6 +184,13 @@ def main():
     parser.add_argument("--norm", choices=["notebook", "zscore"], default="notebook",
                         help="Normalisation formula (default: notebook (x-mean)/(1-std))")
     parser.add_argument("--seed", type=int, default=20, help="Split random state (notebook: 20)")
+    parser.add_argument("--train-seed", type=int, default=None,
+                        help="Seed for weight initialisation, dropout and shuffling "
+                             "(tf.keras.utils.set_random_seed). Default: unseeded, as the notebook. "
+                             "GPU kernels can still add small run-to-run differences")
+    parser.add_argument("--split", choices=["60/20/20", "80/20"], default="60/20/20",
+                        help="60/20/20 train/val/test (notebook, default) or 80/20 train/test as the "
+                             "paper states; 80/20 trains without a validation set")
     parser.add_argument("--horovod", action="store_true", help="Use Horovod distributed training")
     args = parser.parse_args()
 
@@ -199,6 +206,11 @@ def main():
     n_timesteps = 2 * args.nearby + 1
     n_features = len(features)
     logger.info("Preset %s -> %s", args.preset, cfg)
+
+    if args.train_seed is not None:
+        import tensorflow as tf
+        tf.keras.utils.set_random_seed(args.train_seed)
+        logger.info("Training seed: %d", args.train_seed)
 
     # Horovod setup
     hvd = None
@@ -248,12 +260,16 @@ def main():
     Y = to_categorical(labels, num_classes=N_CLASSES)
     logger.info("LSTM input shape: %s, labels shape: %s", X.shape, Y.shape)
 
-    # Train/val/test split 60/20/20 on indices (Notebook 3, cell 23)
+    # Train/val/test split 60/20/20 on indices (Notebook 3, cell 23), or the paper's 80/20.
+    # The test split is identical in both, so the two are scored on the same windows.
     from sklearn.model_selection import train_test_split
     idx = np.arange(len(X))
     idx_trainval, idx_test = train_test_split(idx, test_size=0.2, shuffle=True, random_state=args.seed)
-    idx_train, idx_val = train_test_split(idx_trainval, test_size=0.25, shuffle=True,
-                                          random_state=args.seed)
+    if args.split == "80/20":
+        idx_train, idx_val = idx_trainval, idx_trainval[:0]
+    else:
+        idx_train, idx_val = train_test_split(idx_trainval, test_size=0.25, shuffle=True,
+                                              random_state=args.seed)
     logger.info("Train: %d, Val: %d, Test: %d", len(idx_train), len(idx_val), len(idx_test))
 
     # Data parallelism: each rank trains on a disjoint shard, so an epoch costs
@@ -283,7 +299,7 @@ def main():
     history = model.fit(
         X[idx_train], Y[idx_train],
         epochs=cfg["epochs"], batch_size=args.batch_size,
-        validation_data=(X[idx_val], Y[idx_val]),
+        validation_data=(X[idx_val], Y[idx_val]) if len(idx_val) else None,
         callbacks=callbacks,
         verbose=2 if (hvd is None or hvd.rank() == 0) else 0,
     )
@@ -322,7 +338,8 @@ def main():
         metrics = {
             "preset": args.preset,
             "config": {**cfg, "dense_units": dense_units, "alpha": alpha,
-                       "batch_size": args.batch_size, "norm": args.norm, "seed": args.seed},
+                       "batch_size": args.batch_size, "norm": args.norm, "seed": args.seed,
+                       "train_seed": args.train_seed, "split": args.split},
             "features": features,
             "n_samples": int(len(df)),
             "n_train": int(len(idx_train)), "n_val": int(len(idx_val)), "n_test": int(len(idx_test)),
